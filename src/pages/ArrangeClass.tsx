@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import { useBlockedTime } from '../contexts/BlockedTimeContext';
 import { supabase } from '../services/supabase';
 import { courseService, studentService, scheduleService, teacherService, roomService, classService, largeClassScheduleService, blockedSlotService, weekConfigService, operationLogService } from '../services';
 import websocketService from '../services/websocketService';
@@ -106,6 +107,8 @@ interface StudentGroup {
 
 export default function ArrangeClass() {
   const { user, teacher, isAdmin, refreshTeacher, onlineTeachers, refreshOnlineTeachers } = useAuth();
+  const { refreshBlockedTimes, hasLoaded: blockedTimesLoaded } = useBlockedTime();
+  const [blockedTimesSchedulingReady, setBlockedTimesSchedulingReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -304,9 +307,6 @@ export default function ArrangeClass() {
   const [batchDay, setBatchDay] = useState<number>(2);
   const [batchPeriods, setBatchPeriods] = useState<number[]>([4]);
   
-  // 禁排时段状态
-  const [blockedSlots, setBlockedSlots] = useState<any[]>([]);
-
   // 通适大课状态
   const [largeClassEntries, setLargeClassEntries] = useState<any[]>([]);
 
@@ -323,21 +323,6 @@ export default function ArrangeClass() {
     weeks11_14: true,
     weeks15_17: true
   });
-
-  // 获取禁排时段数据（获取所有数据，不按学期筛选）
-  const getBlockedSlots = useCallback(async () => {
-    try {
-      const blockedSlots = await blockedSlotService.getAll();
-
-      // 更新禁排时段状态
-      setBlockedSlots(blockedSlots);
-      return blockedSlots;
-    } catch (error) {
-      console.error('获取禁排时段失败:', error);
-      setBlockedSlots([]);
-      return [];
-    }
-  }, []);
 
   // 辅助函数：通过内部ID或课程编号查找课程
   const findCourseById = (coursesList: any[], courseId: string) => {
@@ -357,94 +342,51 @@ export default function ArrangeClass() {
            (sc as any).course_type === '理论课';
   };
 
-  // 检查周次是否为全周禁排
-  const isWeekFullyBlocked = (week: number, blockedSlots: any[] = [], currentClass?: string): boolean => {
-    // 检查是否有明确的全周禁排
-    const hasFullWeekBlock = blockedSlots.some(slot => {
-      // 检查班级关联：如果禁排有关联班级，且当前班级不在关联列表中，则跳过
-      if (slot.class_associations && slot.class_associations.length > 0 && currentClass) {
-        const isClassAssociated = slot.class_associations.some(assoc => assoc.name === currentClass);
-        if (!isClassAssociated) {
-          return false;
-        }
-      }
-      
-      // 检查是否为全周禁排（没有指定具体天数）
-      if (slot.type === 'specific' && slot.week_number === week && !slot.day_of_week && !slot.specific_week_days) {
-        return true;
-      }
-      
-      return false;
-    });
-    
-    if (hasFullWeekBlock) {
-      return true;
-    }
-    
-    // 检查是否所有天都被禁排（7天全禁排视为全周禁排）
-    const blockedDays = new Set<number>();
-    
-    blockedSlots.forEach(slot => {
-      // 检查班级关联：如果禁排有关联班级，且当前班级不在关联列表中，则跳过
-      if (slot.class_associations && slot.class_associations.length > 0 && currentClass) {
-        const isClassAssociated = slot.class_associations.some(assoc => assoc.name === currentClass);
-        if (!isClassAssociated) {
-          return;
-        }
-      }
-      
-      // 检查特定周次的特定天禁排
-      if (slot.type === 'specific' && slot.week_number === week && slot.day_of_week) {
-        blockedDays.add(slot.day_of_week);
-      }
-      
-      // 检查specific_week_days中的禁排
-      if (slot.type === 'specific' && slot.specific_week_days) {
-        slot.specific_week_days.forEach((wd: any) => {
-          if (wd.week === week && wd.day) {
-            blockedDays.add(wd.day);
-          }
-        });
-      }
-    });
-    
-    // 一周有7天，如果所有天都被禁排，则视为全周禁排
-    return blockedDays.size === 7;
+  // 检查禁排是否匹配当前班级（支持全班级：无 class_name/class_associations 即匹配所有）
+  const isBlockedMatchClass = (slot: any, currentClassOrClasses?: string | string[]): boolean => {
+    const classNames = slot.class_name ? (typeof slot.class_name === 'string' ? slot.class_name.split(/[,，]/).map((s: string) => s.trim()) : []) : [];
+    const assocNames = (slot.class_associations || []).map((a: any) => (typeof a === 'string' ? a : a?.name) || '').filter(Boolean);
+    const hasClassFilter = classNames.length > 0 || assocNames.length > 0;
+    if (!hasClassFilter) return true; // 全班级禁排
+    const classes = Array.isArray(currentClassOrClasses) ? currentClassOrClasses : (currentClassOrClasses ? [currentClassOrClasses] : []);
+    if (classes.length === 0) return false;
+    const match = (n: string) => n && classes.some(c => c && (c.includes(n) || n.includes(c)));
+    return classNames.some(match) || assocNames.some(match);
   };
-  
-  // 检查周次是否有部分禁排
-  const hasWeekPartialBlock = (week: number, blockedSlots: any[] = [], currentClass?: string): boolean => {
-    // 如果是全周禁排，则不是部分禁排
-    if (isWeekFullyBlocked(week, blockedSlots, currentClass)) {
-      return false;
+
+  // 检查周次是否为全周禁排（使用统一格式 unifiedBlockedTimes）
+  const isWeekFullyBlocked = (week: number, blockedTimes: any[] = [], currentClass?: string): boolean => {
+    // 统一格式：检查该周是否所有 (day, period) 都被禁排
+    const blockedSet = new Set<string>();
+    blockedTimes.forEach((slot: any) => {
+      if (!isBlockedMatchClass(slot, currentClass)) return;
+      const weeks = Array.isArray(slot.weeks) ? slot.weeks : [];
+      if (!weeks.includes(week)) return;
+      const day = slot.day_of_week !== undefined ? slot.day_of_week : slot.day;
+      if (!day || !slot.periods) return;
+      (slot.periods || []).forEach((p: number) => blockedSet.add(`${day}-${p}`));
+    });
+    for (let d = 1; d <= 7; d++) {
+      for (let p = 1; p <= 10; p++) {
+        if (!blockedSet.has(`${d}-${p}`)) return false;
+      }
     }
+    return blockedSet.size > 0;
+  };
 
-    return blockedSlots.some(slot => {
-      // 检查班级关联：如果禁排有关联班级，且当前班级不在关联列表中，则跳过
-      if (slot.class_associations && slot.class_associations.length > 0 && currentClass) {
-        const isClassAssociated = slot.class_associations.some(assoc => assoc.name === currentClass);
-        if (!isClassAssociated) {
-          return false;
-        }
-      }
-
-      // 检查特定周次的特定星期禁排
-      if (slot.type === 'specific' && slot.specific_week_days) {
-        return slot.specific_week_days.some(wd => wd.week === week);
-      }
-
-      // 检查特定周次的特定天禁排
-      if (slot.type === 'specific' && slot.week_number === week && slot.day_of_week) {
-        return true;
-      }
-
-      return false;
+  // 检查周次是否有部分禁排（使用统一格式）
+  const hasWeekPartialBlock = (week: number, blockedTimes: any[] = [], currentClass?: string): boolean => {
+    if (isWeekFullyBlocked(week, blockedTimes, currentClass)) return false;
+    return blockedTimes.some((slot: any) => {
+      if (!isBlockedMatchClass(slot, currentClass)) return false;
+      const weeks = Array.isArray(slot.weeks) ? slot.weeks : [];
+      return weeks.includes(week);
     });
   };
 
   // 检查周次是否在禁排范围内
-  const isWeekBlocked = (week: number, blockedSlots: any[] = [], currentClass?: string): boolean => {
-    return isWeekFullyBlocked(week, blockedSlots, currentClass);
+  const isWeekBlocked = (week: number, blockedTimes: any[] = [], currentClass?: string): boolean => {
+    return isWeekFullyBlocked(week, blockedTimes, currentClass);
   };
 
   // 使用专业大课禁排数据检查周次是否有禁排（用于周次选择器）
@@ -453,10 +395,8 @@ export default function ArrangeClass() {
       return { fullyBlocked: false, partiallyBlocked: false };
     }
 
-    // 从统一的禁排时间列表中获取数据（已从服务器加载）
-    const classBlockedTimes = unifiedBlockedTimes.filter((b: any) =>
-      b.class_name && currentClass && b.class_name.includes(currentClass)
-    );
+    // 从统一的禁排时间列表中获取数据（支持全班级：无 class_name 即匹配所有）
+    const classBlockedTimes = unifiedBlockedTimes.filter((b: any) => isBlockedMatchClass(b, currentClass));
 
     // 检查该周是否有禁排数据
     const weekBlockedTimes = classBlockedTimes.filter((b: any) =>
@@ -467,14 +407,13 @@ export default function ArrangeClass() {
       return { fullyBlocked: false, partiallyBlocked: false };
     }
 
-    // 按天分组，检查每天的禁排节次
+    // 按天分组，检查每天的禁排节次（统一 day_of_week ?? day）
     const dayPeriods: Map<number, Set<number>> = new Map();
     weekBlockedTimes.forEach((b: any) => {
-      if (b.day && b.periods && Array.isArray(b.periods)) {
-        if (!dayPeriods.has(b.day)) {
-          dayPeriods.set(b.day, new Set());
-        }
-        b.periods.forEach((p: number) => dayPeriods.get(b.day)?.add(p));
+      const d = b.day_of_week !== undefined ? b.day_of_week : b.day;
+      if (d && b.periods && Array.isArray(b.periods)) {
+        if (!dayPeriods.has(d)) dayPeriods.set(d, new Set());
+        b.periods.forEach((p: number) => dayPeriods.get(d)?.add(p));
       }
     });
 
@@ -574,126 +513,29 @@ export default function ArrangeClass() {
     });
   }, [largeClassEntries]);
 
-  // 同步所有禁排数据到统一格式（参考专业大课页面）
+  // 同步所有禁排数据到统一格式（单一来源：仅导入禁排 + 通适大课，不再使用 blockedSlots）
   const syncBlockedTimes = useCallback(() => {
     try {
       const allBlockedTimes: any[] = [];
 
-      // 调试：查看 blockedSlots 的数据格式
-      if (blockedSlots.length > 0) {
-        // 筛选包含音乐学2303的数据
-        const music2303Slots = blockedSlots.filter((s: any) => {
-          const associations = s.class_associations || [];
-          return associations.some((assoc: any) => {
-            const name = typeof assoc === 'string' ? assoc : assoc?.name;
-            return name && name.includes('音乐学2303');
+      // 1. 导入禁排（单一来源，来自 BlockedTimeContext 写入的 localStorage）
+      const importedBlockedTimes = JSON.parse(localStorage.getItem('music_scheduler_imported_blocked_times') || '[]');
+      importedBlockedTimes.forEach((b: any) => {
+        const weeks = Array.isArray(b.weeks) ? b.weeks : [];
+        const day = b.day_of_week !== undefined ? b.day_of_week : b.day;
+        const periods = Array.isArray(b.periods) ? b.periods : [];
+        if (weeks.length > 0 && day && periods.length > 0) {
+          allBlockedTimes.push({
+            class_name: b.class_name,
+            class_associations: b.class_associations,
+            weeks,
+            day,
+            day_of_week: day,
+            periods,
+            reason: b.reason || '禁排时间'
           });
-        });
-
-      }
-
-      // 1. 处理周次配置禁排数据 (blockedSlots)
-      if (blockedSlots.length > 0) {
-        blockedSlots.forEach((slot: any) => {
-          // 提取班级列表
-          const classNames: string[] = [];
-          if (slot.class_associations && slot.class_associations.length > 0) {
-            slot.class_associations.forEach((assoc: any) => {
-              if (typeof assoc === 'string') {
-                classNames.push(assoc);
-              } else if (assoc && assoc.name) {
-                classNames.push(assoc.name);
-              }
-            });
-          }
-
-          // 如果没有班级关联，跳过
-          if (classNames.length === 0) {
-
-            return;
-          }
-
-          // 提取节次范围
-          const periods: number[] = [];
-          if (slot.start_period && slot.end_period) {
-            for (let i = slot.start_period; i <= slot.end_period; i++) {
-              periods.push(i);
-            }
-          }
-
-          // 如果没有节次，跳过
-          if (periods.length === 0) {
-            return;
-          }
-
-          // 情况1: 有 specific_week_days 数组
-          if (slot.specific_week_days && slot.specific_week_days.length > 0) {
-            slot.specific_week_days.forEach((swd: any) => {
-              if (swd.week && swd.day) {
-                classNames.forEach((className: string) => {
-                  allBlockedTimes.push({
-                    class_name: className,
-                    weeks: [swd.week],
-                    day: swd.day,
-                    periods: [...periods],
-                    reason: slot.reason || '禁排时间'
-                  });
-                });
-              }
-            });
-            return;
-          }
-
-          // 情况2: 有 weeks 字段（逗号分隔的周次列表）
-          if (slot.weeks && slot.day_of_week) {
-            const weeksStr = slot.weeks as string;
-            const weeks: number[] = [];
-            const parts = weeksStr.split(/[,，]/);
-            for (const part of parts) {
-              const trimmed = part.trim();
-              if (trimmed.includes('-')) {
-                const [start, end] = trimmed.split('-').map((s: string) => parseInt(s.trim()));
-                if (!isNaN(start) && !isNaN(end)) {
-                  for (let i = start; i <= end; i++) {
-                    weeks.push(i);
-                  }
-                }
-              } else {
-                const weekNum = parseInt(trimmed);
-                if (!isNaN(weekNum)) {
-                  weeks.push(weekNum);
-                }
-              }
-            }
-
-            classNames.forEach((className: string) => {
-              allBlockedTimes.push({
-                class_name: className,
-                weeks: weeks,
-                day: slot.day_of_week,
-                periods: [...periods],
-                reason: slot.reason || '禁排时间'
-              });
-            });
-            return;
-          }
-
-          // 情况3: 有 day_of_week（每周循环）
-          if (slot.day_of_week) {
-            const totalWeeks = 17; // 默认17周
-            const allWeeks = Array.from({length: totalWeeks}, (_, i) => i + 1);
-            classNames.forEach((className: string) => {
-              allBlockedTimes.push({
-                class_name: className,
-                weeks: allWeeks,
-                day: slot.day_of_week,
-                periods: [...periods],
-                reason: slot.reason || '禁排时间'
-              });
-            });
-          }
-        });
-      }
+        }
+      });
 
       // 2. 处理通适大课数据
       if (largeClassEntries.length > 0) {
@@ -764,69 +606,29 @@ export default function ArrangeClass() {
     } catch (error) {
       console.error('同步禁排数据失败:', error);
     }
-  }, [blockedSlots, largeClassEntries]);
+  }, [largeClassEntries]);
 
-  // 初始化时间网格
+  // 初始化时间网格（单一来源：使用 unifiedBlockedTimes）
   const initializeTimeGrid = useCallback(async () => {
     try {
-      const blockedSlots = await getBlockedSlots();
+      const currentClass = groupStudents.length > 0 ? (groupStudents[0].major_class || groupStudents[0].class_name || '') : '';
+      const allClasses = groupStudents.length > 0 ? Array.from(new Set(groupStudents.map((s: any) => s.major_class || s.class_name || '').filter((c: string) => c))) : [];
       const grid = [];
       for (let day = 0; day < 7; day++) {
         const dayRow = [];
         for (let period = 0; period < 10; period++) {
-          // 检查是否为禁排时段
           let isBlocked = false;
-          
-          // 检查从服务端获取的禁排时段
-          isBlocked = blockedSlots.some(slot => {
-            // 检查每周循环禁排
-            if (slot.type === 'recurring' && slot.day_of_week === day + 1) {
-              // 检查班级关联：如果禁排有关联班级，则需要考虑当前班级
-              if (slot.class_associations && slot.class_associations.length > 0) {
-                // 如果有选中的学生，检查是否有班级匹配
-                if (groupStudents.length > 0) {
-                  const allClasses = Array.from(new Set(groupStudents.map(s => s.major_class || s.class_name || '').filter(c => c)));
-                  const hasClassMatch = slot.class_associations.some(assoc => {
-                    const assocName = typeof assoc === 'string' ? assoc : assoc?.name;
-                    return assocName && allClasses.some(c => c.includes(assocName) || assocName.includes(c));
-                  });
-                  if (!hasClassMatch) {
-                    return false; // 跳过与当前选中学生班级不匹配的禁排
-                  }
-                } else {
-                  return false; // 没有选中学生时，跳过有班级关联的禁排
-                }
-              }
-              
-              if (slot.start_period && slot.end_period) {
-                return period + 1 >= slot.start_period && period + 1 <= slot.end_period;
-              }
-              return slot.start_period === period + 1;
-            }
-            
-            // 检查特定周次的特定星期禁排
-            if (slot.type === 'specific' && slot.specific_week_days) {
-              // 检查班级关联
-              if (slot.class_associations && slot.class_associations.length > 0) {
-                if (groupStudents.length > 0) {
-                  const allClasses = Array.from(new Set(groupStudents.map(s => s.major_class || s.class_name || '').filter(c => c)));
-                  const hasClassMatch = slot.class_associations.some(assoc => {
-                    const assocName = typeof assoc === 'string' ? assoc : assoc?.name;
-                    return assocName && allClasses.some(c => c.includes(assocName) || assocName.includes(c));
-                  });
-                  if (!hasClassMatch) {
-                    return false;
-                  }
-                } else {
-                  return false;
-                }
-              }
-              return slot.specific_week_days.some(wd => wd.day === day + 1);
-            }
-            
-            return false;
+
+          // 使用统一格式禁排（导入禁排 + 通适大课）
+          isBlocked = unifiedBlockedTimes.some((slot: any) => {
+            if (!isBlockedMatchClass(slot, allClasses.length > 0 ? allClasses : currentClass)) return false;
+            const weeks = Array.isArray(slot.weeks) ? slot.weeks : [];
+            if (weeks.length > 0 && !weeks.includes(selectedWeek)) return false;
+            const d = slot.day_of_week !== undefined ? slot.day_of_week : slot.day;
+            if (d !== day + 1) return false;
+            return (slot.periods || []).includes(period + 1);
           });
-          
+
           // 检查硬编码的禁排时段（例如：所有周一下午5-8节禁排）
           if (!isBlocked) {
             isBlocked = isPeriodBlocked(day + 1, period + 1);
@@ -877,11 +679,12 @@ export default function ArrangeClass() {
                 );
               });
               
-              // 检查是否有任何周次的禁排
+              // 检查是否有任何周次的禁排（统一 day_of_week ?? day）
               const isBlockedByImported = allClassesBlockedTimes.some((blockedTime: any) => {
-                if (blockedTime.day !== day + 1) return false;
+                const d = blockedTime.day_of_week !== undefined ? blockedTime.day_of_week : blockedTime.day;
+                if (d !== day + 1) return false;
                 if (!blockedTime.periods || !blockedTime.periods.includes(period + 1)) return false;
-                return true; // 只要有任何周次的禁排，就标记为禁排
+                return true;
               });
               
               if (isBlockedByImported) {
@@ -940,7 +743,7 @@ export default function ArrangeClass() {
       }
       setTimeGridStatus(grid);
     }
-  }, [getBlockedSlots, groupStudents, scheduledClasses, targetTeacher, teacher]);
+  }, [unifiedBlockedTimes, selectedWeek, groupStudents, scheduledClasses, targetTeacher, teacher]);
 
   // 检查时段是否可用（同步版本，用于批量选择）
   const isSlotAvailableSync = (day: number, period: number, week: number) => {
@@ -955,26 +758,17 @@ export default function ArrangeClass() {
       return false;
     }
 
-    // 检查班级的专业大课禁排时间数据（支持混合小组，检查所有班级）
-    // 使用统一的禁排时间列表（已从服务器加载）
-    if (allClasses.length > 0 && unifiedBlockedTimes.length > 0) {
-      const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => {
-        const blockedClassName = b.class_name;
-        return blockedClassName && allClasses.some((className: string) =>
-          blockedClassName.includes(className)
-        );
-      });
-
+    // 检查班级的专业大课禁排时间数据（支持全班级，统一 day_of_week ?? day）
+    if (unifiedBlockedTimes.length > 0) {
+      const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => isBlockedMatchClass(b, allClasses));
       const isBlockedByImported = allClassesBlockedTimes.some((blockedTime: any) => {
         if (!blockedTime.weeks || !blockedTime.weeks.includes(week)) return false;
-        if (blockedTime.day !== day) return false;
+        const d = blockedTime.day_of_week !== undefined ? blockedTime.day_of_week : blockedTime.day;
+        if (d !== day) return false;
         if (!blockedTime.periods || !blockedTime.periods.includes(period)) return false;
         return true;
       });
-
-      if (isBlockedByImported) {
-        return false;
-      }
+      if (isBlockedByImported) return false;
     }
 
     // 直接从排课记录中检查班级的专业大课禁排（不依赖localStorage）
@@ -1079,7 +873,7 @@ export default function ArrangeClass() {
     return true;
   };
 
-  // 检查时段是否可用（异步版本，用于单选和范围选择）
+  // 检查时段是否可用（异步版本，单一来源：使用 unifiedBlockedTimes）
   const isSlotAvailable = async (day: number, period: number, week: number = selectedWeek) => {
     try {
       // 先检查同步的禁排
@@ -1088,58 +882,20 @@ export default function ArrangeClass() {
       }
 
       const currentClass = groupStudents.length > 0 ? (groupStudents[0].major_class || groupStudents[0].class_name || '') : '';
-      const blockedSlots = await getBlockedSlots();
 
-      // 检查特定周次的特定星期禁排
-      const hasSpecificWeekDayBlock = blockedSlots.some(slot => {
-        if (slot.class_associations && slot.class_associations.length > 0 && currentClass) {
-          const isClassAssociated = slot.class_associations.some(assoc => assoc.name === currentClass);
-          if (!isClassAssociated) {
-            return false;
-          }
-        }
-
-        if (slot.type === 'specific') {
-          if (slot.week_number === week && slot.day_of_week === day) {
-            if (slot.start_period && slot.end_period) {
-              return period >= slot.start_period && period <= slot.end_period;
-            }
-            return slot.start_period === period || !slot.start_period;
-          }
-
-          if (slot.specific_week_days) {
-            return slot.specific_week_days.some(wd => wd.week === week && wd.day === day);
-          }
-        }
-        return false;
+      // 使用统一格式检查禁排（导入禁排 + 通适大课）
+      const hasBlocked = unifiedBlockedTimes.some((slot: any) => {
+        if (!isBlockedMatchClass(slot, currentClass)) return false;
+        const weeks = Array.isArray(slot.weeks) ? slot.weeks : [];
+        if (!weeks.includes(week)) return false;
+        const d = slot.day_of_week !== undefined ? slot.day_of_week : slot.day;
+        if (d !== day) return false;
+        return (slot.periods || []).includes(period);
       });
-      if (hasSpecificWeekDayBlock) {
-        return false;
-      }
+      if (hasBlocked) return false;
 
       // 检查周次是否被禁排（全周禁排）
-      if (isWeekBlocked(week, blockedSlots, currentClass)) {
-        return false;
-      }
-
-      // 检查每周循环禁排
-      const hasRecurringBlock = blockedSlots.some(slot => {
-        if (slot.class_associations && slot.class_associations.length > 0 && currentClass) {
-          const isClassAssociated = slot.class_associations.some(assoc => assoc.name === currentClass);
-          if (!isClassAssociated) {
-            return false;
-          }
-        }
-
-        if (slot.type === 'recurring' && slot.day_of_week === day) {
-          if (slot.start_period && slot.end_period) {
-            return period >= slot.start_period && period <= slot.end_period;
-          }
-          return slot.start_period === period;
-        }
-        return false;
-      });
-      if (hasRecurringBlock) {
+      if (isWeekBlocked(week, unifiedBlockedTimes, currentClass)) {
         return false;
       }
 
@@ -1524,6 +1280,31 @@ export default function ArrangeClass() {
       return;
     }
 
+    // 计算 effectiveSelectedTimeSlots：排除对小组内任一学生为禁排的节次
+    const effectiveSelectedTimeSlots = selectedTimeSlots.filter(slot => {
+      return !groupStudents.some(student => {
+        const studentClass = student.major_class || '';
+        return unifiedBlockedTimes.some((bt: any) => {
+          if (!isBlockedMatchClass(bt, studentClass)) return false;
+          if (!bt.weeks || !bt.weeks.includes(slot.week)) return false;
+          const d = bt.day_of_week !== undefined ? bt.day_of_week : bt.day;
+          if (d !== slot.day) return false;
+          return bt.periods && bt.periods.includes(slot.period);
+        });
+      });
+    });
+
+    if (effectiveSelectedTimeSlots.length === 0) {
+      showToast('error', '所选时间均与禁排冲突，请重新选择');
+      return;
+    }
+
+    // 课程最多 16 节次，超出禁止保存
+    if (effectiveSelectedTimeSlots.length > 16) {
+      showToast('error', `该课程最多排 16 节，当前已选 ${effectiveSelectedTimeSlots.length} 节，请减少后再保存`);
+      return;
+    }
+
     // 验证分组
     const validation = validateCurrentGroup();
     if (!validation.isValid) {
@@ -1649,7 +1430,7 @@ export default function ArrangeClass() {
       // 检查所有学生的课时是否完成
       const incompleteStudents: string[] = [];
       studentProgresses.forEach(({ student, progress }) => {
-        const totalPlannedHours = selectedTimeSlots.length;
+        const totalPlannedHours = effectiveSelectedTimeSlots.length;
         const totalCompletedHours = progress.completed + totalPlannedHours;
         const totalRequiredHours = progress.completed + progress.remaining;
 
@@ -1778,11 +1559,11 @@ export default function ArrangeClass() {
       const roomId = roomInfo?.room?.id || undefined;
 
       // 计算总任务数
-      const totalTasks = groupStudents.length * selectedTimeSlots.length;
+      const totalTasks = groupStudents.length * effectiveSelectedTimeSlots.length;
       let completedTasks = 0;
 
       // 检查教师冲突（在保存前一次性检查所有时段）
-      for (const slot of selectedTimeSlots) {
+      for (const slot of effectiveSelectedTimeSlots) {
         const teacherSlotKey = `${effectiveTeacher.id}_${slot.day}_${slot.period}_${slot.week}`;
         const teacherConflict = teacherSchedulesMap.get(teacherSlotKey);
 
@@ -1815,7 +1596,7 @@ export default function ArrangeClass() {
         const studentProgress = studentProgresses.find(sp => sp.student.id === student.id);
         const progress = studentProgress?.progress;
         
-        for (const slot of selectedTimeSlots) {
+        for (const slot of effectiveSelectedTimeSlots) {
           // 检查学生排课冲突（跨教师）
           // 学生同一时段不能被不同教师排课（无论课程是否相同）
           const studentSlotKey = `${student.id}_${slot.day}_${slot.period}_${slot.week}`;
@@ -1835,12 +1616,12 @@ export default function ArrangeClass() {
             return;
           }
 
-          // 检查禁排时间冲突
+          // 检查禁排时间冲突（统一 day_of_week ?? day，支持全班级）
           const studentClass = student.major_class || '';
           const blockedTimeConflict = unifiedBlockedTimes.find((bt: any) =>
-            bt.class_name && studentClass && bt.class_name.includes(studentClass) &&
+            isBlockedMatchClass(bt, studentClass) &&
             bt.weeks && bt.weeks.includes(slot.week) &&
-            bt.day === slot.day &&
+            (bt.day_of_week !== undefined ? bt.day_of_week : bt.day) === slot.day &&
             bt.periods && bt.periods.includes(slot.period)
           );
 
@@ -2724,19 +2505,29 @@ export default function ArrangeClass() {
     // targetTeacher 的变化会触发数据加载 useEffect，不需要在这里重复触发
   }, [teacher, isAdmin, user, refreshOnlineTeachers]);
   
-  // 加载禁排数据
+  // 方案 A：进入排课页强制加载完整禁排，未就绪前禁用时间网格与保存
   useEffect(() => {
-    const loadBlockedSlots = async () => {
-      await getBlockedSlots();
+    let cancelled = false;
+    const load = async () => {
+      try {
+        await refreshBlockedTimes();
+        if (!cancelled) {
+          syncBlockedTimes();
+          setBlockedTimesSchedulingReady(true);
+        }
+      } catch (e) {
+        console.error('加载禁排失败:', e);
+        if (!cancelled) setBlockedTimesSchedulingReady(true);
+      }
     };
-    
-    loadBlockedSlots();
-  }, [getBlockedSlots]);
+    load();
+    return () => { cancelled = true; };
+  }, [refreshBlockedTimes, syncBlockedTimes]);
 
-  // 当 blockedSlots 或 largeClassEntries 变化时，同步到统一格式
+  // 当 largeClassEntries 变化时，同步到统一格式
   useEffect(() => {
-    syncBlockedTimes();
-  }, [blockedSlots, largeClassEntries, syncBlockedTimes]);
+    if (blockedTimesLoaded) syncBlockedTimes();
+  }, [blockedTimesLoaded, largeClassEntries, syncBlockedTimes]);
 
   // 加载数据 - 基于目标教师
   useEffect(() => {
@@ -6910,7 +6701,7 @@ export default function ArrangeClass() {
                 <div className="md:col-span-1 flex items-center">
                   <button
                     onClick={handleSaveSchedule}
-                    disabled={selectedTimeSlots.length === 0}
+                    disabled={selectedTimeSlots.length === 0 || !blockedTimesSchedulingReady}
                     className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     保存
@@ -7552,85 +7343,6 @@ export default function ArrangeClass() {
             </div>
           ))}
         </div>
-      </div>
-    );
-  };
-
-  // 渲染禁排时间列表
-  const renderBlockedTimesList = () => {
-    // 直接从本地存储读取专业大课的禁排时间数据
-    const importedBlockedTimes = JSON.parse(localStorage.getItem('music_scheduler_imported_blocked_times') || '[]');
-
-    // 获取当前选中的所有班级信息（支持混合小组）
-    const allClasses = groupStudents.length > 0
-      ? Array.from(new Set(groupStudents.map(s => s.major_class || s.class_name || '').filter(c => c)))
-      : [];
-
-    // 筛选所有班级的禁排数据（支持混合小组）
-    const classBlockedTimes = importedBlockedTimes.filter((item: any) =>
-      item.class_name && allClasses.some((className: string) => item.class_name.includes(className))
-    );
-
-    // 按星期顺序排序（周一到周日）
-    classBlockedTimes.sort((a: any, b: any) => {
-      const dayA = a.day || 0;
-      const dayB = b.day || 0;
-      return dayA - dayB;
-    });
-
-    return (
-      <div className="mt-6 bg-white p-4 rounded-lg shadow-sm">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">禁排时间列表</h2>
-
-        {classBlockedTimes.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-2 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">班级</th>
-                  <th className="px-4 py-2 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">周次</th>
-                  <th className="px-4 py-2 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">星期</th>
-                  <th className="px-4 py-2 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">节次</th>
-                  <th className="px-4 py-2 text-left text-sm font-medium text-gray-500 uppercase tracking-wider">禁排原因</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {classBlockedTimes.map((item: any, index: number) => (
-                  <tr key={index}>
-                    <td className="px-4 py-2 text-sm text-gray-900">{item.class_name}</td>
-                    <td className="px-4 py-2 text-sm text-gray-900">
-                      {item.weeks && item.weeks.length > 0
-                        ? item.weeks.join(', ')
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-2 text-sm text-gray-900">
-                      {item.day === 1 ? '周一' :
-                       item.day === 2 ? '周二' :
-                       item.day === 3 ? '周三' :
-                       item.day === 4 ? '周四' :
-                       item.day === 5 ? '周五' :
-                       item.day === 6 ? '周六' : '周日'}
-                    </td>
-                    <td className="px-4 py-2 text-sm text-gray-900">
-                      {item.periods && item.periods.length > 0
-                        ? item.periods.join(', ')
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-2 text-sm text-gray-900">{item.reason || '禁排时间'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="mt-2 text-sm text-gray-500">
-              共 {classBlockedTimes.length} 条禁排记录
-            </div>
-          </div>
-        ) : (
-          <div className="text-center py-8 text-gray-500">
-            <p>暂无禁排时间</p>
-            <p className="text-sm mt-2">当前班级没有禁排时间记录</p>
-          </div>
-        )}
       </div>
     );
   };
@@ -9612,17 +9324,21 @@ export default function ArrangeClass() {
         
         {/* 时间网格和侧边面板 */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* 时间网格 */}
-          <div className="lg:col-span-3">
-            {renderTimeGrid()}
+          {/* 时间网格（禁排未就绪前禁用） */}
+          <div className="lg:col-span-3 relative">
+            {!blockedTimesSchedulingReady && (
+              <div className="absolute inset-0 bg-gray-100/80 flex items-center justify-center z-10 rounded-lg">
+                <span className="text-gray-600">正在加载禁排时间…</span>
+              </div>
+            )}
+            <div className={!blockedTimesSchedulingReady ? 'pointer-events-none opacity-60' : ''}>
+              {renderTimeGrid()}
+            </div>
           </div>
 
           {/* 侧边面板 */}
           {renderRightPanel()}
         </div>
-
-        {/* 禁排时间列表 */}
-        {renderBlockedTimesList()}
       </div>
 
       </div>
