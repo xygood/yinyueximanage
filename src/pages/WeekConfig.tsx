@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { weekConfigService, blockedSlotService, classService, operationLogService } from '../services';
 import { useAuth } from '../hooks/useAuth';
-import { Calendar, Plus, Trash2, Clock, AlertCircle, Check, X, Lock, Users, Edit } from 'lucide-react';
+import { Calendar, Plus, Trash2, Clock, AlertCircle, Check, X, Lock, Users, Edit, Download } from 'lucide-react';
 import { SemesterWeekConfig, BlockedSlot, BlockedSlotType, PERIOD_CONFIG } from '../types';
+import { exportUtils } from '../utils/excel';
 
 // 班级类型定义
 interface Class {
@@ -398,6 +399,170 @@ export default function WeekConfig() {
     }
   };
 
+  const handleExportBlockedSlots = () => {
+    try {
+      // 准备导出数据
+      const exportData = blockedSlots.flatMap((slot, slotIndex) => {
+        // 生成班级信息
+        let className = '所有班级';
+        if (slot.class_associations && slot.class_associations.length > 0) {
+          className = slot.class_associations.map(c => c.name).join('、');
+        }
+        
+        // 计算日期对应的周次（以周一为一周的第一天）
+        const calculateWeekNumber = (dateString: string): number => {
+          const startDateStr = semesterConfig.start_date || '2026-02-23';
+          const startDate = new Date(startDateStr);
+          const targetDate = new Date(dateString);
+          
+          if (isNaN(startDate.getTime()) || isNaN(targetDate.getTime())) {
+            return 1;
+          }
+          
+          // 获取某日期所在周的周一
+          const getMonday = (date: Date): Date => {
+            const d = new Date(date);
+            const day = d.getDay();
+            // getDay() 返回 0-6，其中 0 是星期日
+            // 周一为一周的第一天：周日(0)属于上一周，周一(1)到周日(0)为一周
+            const diff = day === 0 ? -6 : 1 - day;
+            d.setDate(d.getDate() + diff);
+            return d;
+          };
+          
+          const startMonday = getMonday(startDate);
+          const targetMonday = getMonday(targetDate);
+          
+          const timeDiff = targetMonday.getTime() - startMonday.getTime();
+          const weekDiff = Math.floor(timeDiff / (1000 * 3600 * 24 * 7)) + 1;
+          
+          return Math.max(1, weekDiff);
+        };
+
+        // 生成星期
+        let day = '未知';
+        if (slot.type === 'recurring') {
+          day = WEEK_DAYS.find(d => d.value === slot.day_of_week)?.label || '未知';
+        } else if (slot.specific_week_days && slot.specific_week_days.length > 0) {
+          const days = slot.specific_week_days.map((wd: any) => {
+            return WEEK_DAYS.find(d => d.value === wd.day)?.label || '未知';
+          });
+          day = [...new Set(days)].join('、');
+        } else if (slot.type === 'specific' && slot.start_date && slot.end_date) {
+          const startDate = new Date(slot.start_date);
+          const endDate = new Date(slot.end_date);
+          const daySet = new Set<string>();
+          
+          const currentDate = new Date(startDate);
+          while (currentDate <= endDate) {
+            const dayIndex = currentDate.getDay();
+            const adjustedDayIndex = dayIndex === 0 ? 7 : dayIndex;
+            const dayLabel = WEEK_DAYS.find(d => d.value === adjustedDayIndex)?.label || '未知';
+            daySet.add(dayLabel);
+            
+            currentDate.setDate(currentDate.getDate() + 1);
+          }
+          
+          day = Array.from(daySet).join('、');
+        } else if (slot.type === 'specific') {
+          day = '全周';
+        }
+        
+        // 生成节次
+        const periods = slot.start_period && slot.end_period ? `${slot.start_period}-${slot.end_period}节` : '';
+        
+        // 生成周次
+        let weekRange = '1-17周';
+        if (slot.type === 'specific') {
+          if (slot.weeks) {
+            weekRange = slot.weeks;
+          } else if (slot.week_number) {
+            weekRange = `${slot.week_number}周`;
+          } else if (slot.specific_week_days && slot.specific_week_days.length > 0) {
+            const weeks = [...new Set(slot.specific_week_days.map((wd: any) => wd.week))];
+            if (weeks.length === 1) {
+              weekRange = `${weeks[0]}周`;
+            } else if (weeks.length > 1) {
+              weeks.sort((a, b) => a - b);
+              weekRange = `${weeks[0]}-${weeks[weeks.length - 1]}周`;
+            }
+          } else if (slot.start_date && slot.end_date) {
+            const startDate = new Date(slot.start_date);
+            const endDate = new Date(slot.end_date);
+            const weekDayMap = new Map<string, Set<string>>();
+            
+            // 遍历日期范围内的所有日期，计算每个日期对应的周次和星期几
+            const currentDate = new Date(startDate);
+            while (currentDate <= endDate) {
+              const dateStr = currentDate.toISOString().split('T')[0];
+              const week = calculateWeekNumber(dateStr);
+              const weekKey = `${week}周`;
+              
+              const dayIndex = currentDate.getDay();
+              // getDay() 返回 0-6，其中 0 是星期日，1-6 是周一到周六
+              // 而 WEEK_DAYS 是 1-7，其中 1 是周一，7 是周日
+              const adjustedDayIndex = dayIndex === 0 ? 7 : dayIndex;
+              const dayLabel = WEEK_DAYS.find(d => d.value === adjustedDayIndex)?.label || '未知';
+              
+              // 将星期几添加到对应周次的集合中
+              if (!weekDayMap.has(weekKey)) {
+                weekDayMap.set(weekKey, new Set<string>());
+              }
+              weekDayMap.get(weekKey)?.add(dayLabel);
+              
+              // 移动到下一天
+              currentDate.setDate(currentDate.getDate() + 1);
+            }
+            
+            // 为每个不同的（周次，星期几）组合生成单独的行
+            const rows = [];
+            let index = 0;
+            weekDayMap.forEach((daySet, weekRange) => {
+              const days = Array.from(daySet);
+              days.forEach(dayLabel => {
+                rows.push({
+                  '序号': slotIndex * 100 + index + 1,
+                  '班级': className,
+                  '周次': weekRange,
+                  '星期': dayLabel,
+                  '节次': periods,
+                  '禁排原因': slot.reason || '无'
+                });
+                index++;
+              });
+            });
+            return rows;
+          }
+        } else if (slot.type === 'recurring') {
+          weekRange = `1-${semesterConfig.total_weeks || 17}周`;
+        }
+        
+        // 禁排原因
+        const blockedReason = slot.reason || '无';
+        
+        // 生成单行数据
+        return [{
+          '序号': slotIndex + 1,
+          '班级': className,
+          '周次': weekRange,
+          '星期': day,
+          '节次': periods,
+          '禁排原因': blockedReason
+        }];
+      });
+      
+      // 导出到Excel
+      exportUtils.exportToExcel(exportData, `禁排时段_${semesterConfig.semester_label}`, '禁排时段');
+      
+      // 显示成功消息
+      setMessage({ type: 'success', text: '禁排时段导出成功' });
+      
+    } catch (error) {
+      console.error('导出禁排时段失败:', error);
+      setMessage({ type: 'error', text: '导出禁排时段失败：' + (error instanceof Error ? error.message : '未知错误') });
+    }
+  };
+
   const handleEditBlockedSlot = (slot: BlockedSlot) => {
     setIsEditing(true);
     setEditingSlotId(slot.id);
@@ -623,13 +788,22 @@ export default function WeekConfig() {
             <Clock className="w-5 h-5 text-orange-600" />
             禁排时段管理
           </h2>
-          <button
-            onClick={() => setShowAddBlockedSlot(true)}
-            className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 flex items-center gap-2"
-          >
-            <Plus className="w-4 h-4" />
-            添加禁排时段
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleExportBlockedSlots()}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+            >
+              <Download className="w-4 h-4" />
+              导出禁排时段
+            </button>
+            <button
+              onClick={() => setShowAddBlockedSlot(true)}
+              className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 flex items-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              添加禁排时段
+            </button>
+          </div>
         </div>
 
         {/* 添加禁排时段表单 */}

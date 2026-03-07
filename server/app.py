@@ -15,7 +15,13 @@ def create_app(env='development'):
     current_config = config.get(env, config['default'])
     app.config.from_object(current_config)
     
-    CORS(app, resources={r"/api/*": {"origins": "*"}, r"/socket.io/*": {"origins": "*"}})
+    CORS(
+    app,
+    resources={
+        r"/api/*": {"origins": "*", "expose_headers": ["Content-Disposition"]},
+        r"/socket.io/*": {"origins": "*"},
+    },
+)
     
     app.register_blueprint(api_bp)
     

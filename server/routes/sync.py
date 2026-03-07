@@ -10,6 +10,7 @@ from models.class_model import Class
 from models.user import User
 from models.student_teacher_assignment import StudentTeacherAssignment
 from models.semester_week_config import SemesterWeekConfig
+from models.large_class_schedule import LargeClassSchedule
 from . import api_bp
 import uuid
 from datetime import datetime
@@ -32,7 +33,8 @@ def get_all_data():
             'classes': [c.to_dict() for c in db.query(Class).all()],
             'users': [u.to_dict() for u in db.query(User).all()],
             'assignments': [a.to_dict() for a in db.query(StudentTeacherAssignment).all()],
-            'semester_configs': [c.to_dict() for c in db.query(SemesterWeekConfig).all()]
+            'semester_configs': [c.to_dict() for c in db.query(SemesterWeekConfig).all()],
+            'large_class_schedules': [s.to_dict() for s in db.query(LargeClassSchedule).all()]
         }
         return jsonify(data)
     finally:
@@ -435,28 +437,13 @@ def import_data():
         
         if 'large_class_schedules' in data:
             for s in data['large_class_schedules']:
-                schedule = ScheduledClass(
+                schedule = LargeClassSchedule(
                     id=s.get('id', str(uuid.uuid4())),
-                    teacher_id=s.get('teacher_id'),
-                    course_id=s.get('course_id'),
-                    student_id=convert_student_id(s.get('student_id')),
-                    room_id=s.get('room_id'),
-                    day_of_week=s.get('day_of_week'),
-                    period=s.get('period'),
-                    duration=s.get('duration', 1),
-                    start_week=s.get('start_week'),
-                    end_week=s.get('end_week'),
-                    week_number=s.get('week_number'),
-                    specific_dates=s.get('specific_dates'),
-                    faculty_id=s.get('faculty_id'),
-                    semester_label=s.get('semester_label'),
+                    file_name=s.get('file_name'),
                     academic_year=s.get('academic_year'),
-                    semester=s.get('semester'),
-                    status=s.get('status', 'scheduled'),
-                    group_id=s.get('group_id'),
-                    class_id=s.get('class_id'),
-                    teacher_name=s.get('teacher_name'),
-                    course_code=s.get('course_code')
+                    semester_label=s.get('semester_label'),
+                    entries=s.get('entries', []),
+                    imported_at=datetime.fromisoformat(s['imported_at']) if s.get('imported_at') else None
                 )
                 db.merge(schedule)
             results['large_class_schedules'] = len(data['large_class_schedules'])

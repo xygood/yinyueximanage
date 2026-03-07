@@ -7,7 +7,7 @@ class ScheduledClass(Base):
     __tablename__ = 'scheduled_classes'
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    teacher_id = Column(String(50), comment='教师工号')
+    teacher_id = Column(String(50), nullable=True, comment='教师工号')
     course_id = Column(String(36))
     student_id = Column(String(50))
     room_id = Column(String(36))

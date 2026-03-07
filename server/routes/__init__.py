@@ -29,3 +29,7 @@ from . import auth
 from . import sync
 from . import semester_configs
 from . import large_class_schedules
+from . import teaching_calendar
+from .imported_blocked_times import imported_blocked_times_bp
+
+api_bp.register_blueprint(imported_blocked_times_bp)

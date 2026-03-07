@@ -13,6 +13,8 @@ interface Teacher {
   name: string;
   faculty_id: string;
   can_teach_instruments?: string[];
+  teacher_id?: string;
+  instruments?: string[];
 }
 
 interface FacultyFilterProps {
@@ -20,6 +22,8 @@ interface FacultyFilterProps {
   onInstrumentSelect?: (instrument: string | null) => void;
   selectedFaculty?: string | null;
   selectedInstrument?: string | null;
+   selectedTeacherId?: string | null;
+   onTeacherSelect?: (teacherId: string | null) => void;
   showInstruments?: boolean;
   className?: string;
   teachers?: Teacher[];
@@ -30,6 +34,8 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
   onInstrumentSelect,
   selectedFaculty,
   selectedInstrument,
+  selectedTeacherId,
+  onTeacherSelect,
   showInstruments = true,
   className = '',
   teachers: externalTeachers
@@ -120,15 +126,57 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
     return result;
   }, [localTeachers]);
 
+  const facultyTeachers = useMemo(() => {
+    if (!selectedFaculty) return [];
+
+    return localTeachers
+      .filter(t => t.faculty_id === selectedFaculty)
+      .slice()
+      .sort((a, b) => {
+        const aNo = (a.teacher_id || '').trim();
+        const bNo = (b.teacher_id || '').trim();
+
+        if (aNo && bNo && aNo !== bNo) {
+          return aNo.localeCompare(bNo, 'zh-Hans-CN', { numeric: true });
+        }
+
+        return a.name.localeCompare(b.name, 'zh-Hans-CN');
+      });
+  }, [localTeachers, selectedFaculty]);
+
+  const selectedTeacher = useMemo(
+    () => facultyTeachers.find(t => t.id === selectedTeacherId),
+    [facultyTeachers, selectedTeacherId]
+  );
+
+  const selectedTeacherInstruments = useMemo(() => {
+    if (!selectedTeacher) return [];
+    const source =
+      (selectedTeacher.can_teach_instruments && selectedTeacher.can_teach_instruments.length > 0
+        ? selectedTeacher.can_teach_instruments
+        : (selectedTeacher as any).instruments || []) as string[];
+
+    return Array.from(new Set(source.filter(Boolean)));
+  }, [selectedTeacher]);
+
   const handleFacultyClick = (facultyCode: string) => {
     const newSelection = selectedFaculty === facultyCode ? null : facultyCode;
     onFacultySelect?.(newSelection);
     onInstrumentSelect?.(null);
+    onTeacherSelect?.(null);
   };
 
   const handleInstrumentClick = (instrument: string) => {
     const newSelection = selectedInstrument === instrument ? null : instrument;
     onInstrumentSelect?.(newSelection);
+  };
+
+  const handleTeacherClick = (teacherId: string) => {
+    const newSelection = selectedTeacherId === teacherId ? null : teacherId;
+    onTeacherSelect?.(newSelection);
+    if (newSelection !== selectedTeacherId) {
+      onInstrumentSelect?.(null);
+    }
   };
 
   return (
@@ -207,8 +255,73 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
             </div>
           )}
 
+          {/* 教师列表 */}
+          {selectedFaculty && facultyTeachers.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                教师列表（按工号排序）
+              </label>
+              <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                {facultyTeachers.map((t) => {
+                  const isSelected = selectedTeacherId === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => handleTeacherClick(t.id)}
+                      className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                        isSelected
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      <span className="truncate">{t.name}</span>
+                      {t.teacher_id && (
+                        <span
+                          className={`ml-2 text-xs ${
+                            isSelected ? 'text-purple-100' : 'text-gray-400'
+                          }`}
+                        >
+                          {t.teacher_id}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 教师专业细分 */}
+          {selectedTeacher && selectedTeacherInstruments.length > 1 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
+                <Music className="w-4 h-4" />
+                该教师的专业
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {selectedTeacherInstruments.map((instrument) => {
+                  const isSelected = selectedInstrument === instrument;
+
+                  return (
+                    <button
+                      key={instrument}
+                      onClick={() => handleInstrumentClick(instrument)}
+                      className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                        isSelected
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {instrument}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* 当前筛选状态 */}
-          {(selectedFaculty || selectedInstrument) && (
+          {(selectedFaculty || selectedInstrument || selectedTeacherId) && (
             <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
               <span className="text-sm text-gray-500">当前筛选：</span>
               {selectedFaculty && (
@@ -236,10 +349,22 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
                   </button>
                 </span>
               )}
+              {selectedTeacher && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs">
+                  {selectedTeacher.name}
+                  <button
+                    onClick={() => onTeacherSelect?.(null)}
+                    className="hover:text-green-900"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
               <button
                 onClick={() => {
                   onFacultySelect?.(null);
                   onInstrumentSelect?.(null);
+                  onTeacherSelect?.(null);
                 }}
                 className="text-sm text-gray-400 hover:text-gray-600 ml-auto"
               >

@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify
 from sqlalchemy import func
-from models import ImportedBlockedTime
+from models import ImportedBlockedTime, SemesterWeekConfig
 from models.database import SessionLocal
+from datetime import datetime, timedelta
 import json
 
 imported_blocked_times_bp = Blueprint('imported_blocked_times', __name__)
@@ -9,6 +10,23 @@ imported_blocked_times_bp = Blueprint('imported_blocked_times', __name__)
 def get_db_session():
     """获取数据库会话"""
     return SessionLocal()
+
+def get_semester_start_date(academic_year, semester_label):
+    """从数据库获取学期开始日期"""
+    db = get_db_session()
+    try:
+        config = db.query(SemesterWeekConfig).filter(
+            SemesterWeekConfig.academic_year == academic_year,
+            SemesterWeekConfig.semester_label == semester_label
+        ).first()
+        if config and config.start_date:
+            return config.start_date
+        return None
+    except Exception as e:
+        print(f"获取学期开始日期失败: {e}")
+        return None
+    finally:
+        db.close()
 
 # 解析周次字符串 "3-4周; 1-2,5-9周; 17周" -> [1,2,3,4,5,6,7,8,9,17]
 def parse_week_range(week_range_str):
@@ -130,8 +148,6 @@ def convert_blocked_slot(slot):
     end_date_str = slot.get('end_date')
     
     if start_date_str and end_date_str:
-        from datetime import datetime, timedelta
-        
         try:
             start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
             end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
@@ -139,14 +155,41 @@ def convert_blocked_slot(slot):
             records = []
             current_date = start_date
             
+            # 从数据库获取学期开始日期
+            academic_year = slot.get('academic_year', '2025-2026')
+            semester_label = slot.get('semester_label', '2025-2026-2')
+            semester_start_date = get_semester_start_date(academic_year, semester_label)
+            
+            if not semester_start_date:
+                print(f"警告: 未找到学期开始日期配置 {academic_year} {semester_label}，跳过日期范围处理")
+                # 如果没有学期配置，使用原始周次数据
+                return [{
+                    'academic_year': academic_year,
+                    'semester_label': semester_label,
+                    'class_associations': processed_class_associations,
+                    'weeks': parse_week_range(slot.get('weeks')),
+                    'day_of_week': 1,  # 默认周一
+                    'periods': list(range(
+                        slot.get('start_period', 1),
+                        slot.get('end_period', 10) + 1
+                    )) if slot.get('start_period') else [],
+                    'reason': slot.get('reason', '禁排时间'),
+                    'source_type': 'system_blocked',
+                    'course_name': None,
+                    'teacher_name': None,
+                    'location': None,
+                    'raw_data': slot
+                }]
+            
+            semester_start = datetime.combine(semester_start_date, datetime.min.time())
+            
             # 遍历日期范围内的每一天
             while current_date <= end_date:
                 # Python的weekday(): 周一=0, 周日=6
                 # 我们需要: 周一=1, 周日=7
                 weekday = current_date.weekday() + 1
                 
-                # 计算周次（假设学期开始日期为2026-02-23，这是第1周）
-                semester_start = datetime(2026, 2, 23)  # 2025-2026-2学期开始日期
+                # 计算周次
                 days_diff = (current_date - semester_start).days
                 week_number = max(1, (days_diff // 7) + 1)
                 

@@ -1,6 +1,7 @@
 import * as localStorageService from './localStorage';
 import * as apiService from './api';
 import * as apiAuthService from './authService';
+import { teachingCalendarService } from './teachingCalendarService';
 export * from './scheduleViewService';
 export { STORAGE_KEYS } from './localStorage';
 
@@ -89,6 +90,8 @@ export const teacherService = {
     return localStorageService.teacherService.importTeacherRoomsByFaculty(entries);
   }
 };
+
+export { teachingCalendarService };
 
 export const studentService = {
   async getAll() {
@@ -228,11 +231,18 @@ export const roomService = {
 };
 
 export const scheduleService = {
-  async getAll() {
+  async getAll(params?: { teacher_id?: string; week_number?: number }) {
     if (USE_DATABASE) {
-      return apiService.schedulesApi.getAll();
+      return apiService.schedulesApi.getAll(params);
     }
-    return localStorageService.scheduleService.getAll();
+    const all = await localStorageService.scheduleService.getAll();
+    if (params?.teacher_id && all) {
+      return all.filter((s: any) => s.teacher_id === params.teacher_id);
+    }
+    if (params?.week_number !== undefined && all) {
+      return all.filter((s: any) => s.week_number === params.week_number);
+    }
+    return all;
   },
 
   async create(data: any) {

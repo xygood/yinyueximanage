@@ -39,6 +39,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
   const [currentWeek, setCurrentWeek] = useState(1);
   const [selectedFaculty, setSelectedFaculty] = useState<string | null>(null);
   const [selectedInstrument, setSelectedInstrument] = useState<string | null>(null);
+  const [selectedTeacherId, setSelectedTeacherId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'week' | 'day'>('week');
   const [selectedWeekRange, setSelectedWeekRange] = useState<{ startWeek: number; endWeek: number }>({ startWeek: 1, endWeek: 16 });
   const [totalWeeks, setTotalWeeks] = useState(16);
@@ -130,15 +131,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
     }
   }, [loadSchedules, initialSchedules]);
 
-  // 订阅数据变化
-  useEffect(() => {
-    const unsubscribe = scheduleViewService.subscribeToChanges(() => {
-      console.log('排课数据已更新，重新加载...');
-      loadSchedules();
-    });
-    
-    return () => unsubscribe();
-  }, [loadSchedules]);
+  // 教研室视图以稳定浏览为主，这里不启用实时订阅，避免频繁闪烁加载状态
 
   // 星期标签
   const dayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -154,25 +147,39 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
   // 使用传入的数据或加载的数据
   const displaySchedules = initialSchedules || schedules;
 
-  // 过滤课程（乐器筛选）- 根据教师的可教课程筛选
+  // 过滤课程（教研室/乐器/教师筛选）
   const filteredSchedules = useMemo(() => {
     return displaySchedules.filter(schedule => {
+      // 教师筛选：当选中具体教师时，只显示该教师的排课
+      if (selectedTeacherId) {
+        const teacher = teachers.find(t => t.id === selectedTeacherId);
+        if (!teacher || schedule.teacherName !== teacher.name) return false;
+      }
+
       if (selectedInstrument) {
-        // 根据教师的可教课程筛选
-        const teacher = teachers.find(t => t.name === schedule.teacherName);
-        if (teacher && (teacher as any).can_teach_instruments) {
-          const canTeachCourses = (teacher as any).can_teach_instruments as string[];
-          if (!canTeachCourses.includes(selectedInstrument)) {
+        const specific = (schedule as any).specificInstrument as string | undefined;
+        const courseName = (schedule as any).courseName as string | undefined;
+        const studentClass = (schedule as any).studentClass as string | undefined;
+
+        // 1. 如果已经识别出具体乐器，优先严格匹配
+        if (specific) {
+          if (specific !== selectedInstrument) {
             return false;
           }
         } else {
-          // 如果教师没有可教课程数据，使用课程类型筛选
-          if (schedule.instrument !== selectedInstrument) return false;
+          // 2. 没有具体乐器时，尝试从课程名 / 班级名称中模糊匹配乐器关键字
+          const text = `${courseName || ''}${studentClass || ''}`;
+          if (text && !text.includes(selectedInstrument)) {
+            // 3. 最后兜底：按课程类型字段（钢琴 / 声乐 / 器乐 等）匹配
+            if (schedule.instrument && schedule.instrument !== selectedInstrument) {
+              return false;
+            }
+          }
         }
       }
       return true;
     });
-  }, [displaySchedules, selectedInstrument, teachers]);
+  }, [displaySchedules, selectedInstrument, selectedTeacherId, teachers]);
 
   // 获取琴房名称（与 ArrangeClass 相同的后备逻辑）
   const getRoomName = useCallback((schedule: ScheduleClassView): string => {
@@ -302,7 +309,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                 </span>
               </div>
               {(uniqueClasses.length > 0 || uniqueStudentNames.length > 0 || timeStrings.length > 0) && (
-                <div className="hidden group-hover:block absolute left-0 right-0 top-full z-50 mt-1 p-1.5 bg-gray-800 text-white text-xs rounded shadow-lg max-h-48 overflow-y-auto min-w-max">
+                <div className="hidden group-hover:block absolute left-0 right-0 bottom-full z-[100] mb-1 p-1.5 bg-gray-800 text-white text-xs rounded shadow-lg max-h-48 overflow-y-auto min-w-max">
                   {uniqueClasses.length > 0 && (
                     <div>
                       <span className="text-gray-400">班级：</span>
@@ -371,6 +378,19 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
     return Array.from(groups.values());
   };
 
+  // 每天的小组数量（用于星期导航显示，按小组数而非人数）
+  const groupCountByDay = useMemo(() => {
+    const count: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 };
+    for (const day of [1, 2, 3, 4, 5, 6, 7] as const) {
+      let total = 0;
+      for (const p of PERIOD_CONFIG) {
+        total += getGroupedSchedulesAt(day, p.period).length;
+      }
+      count[day] = total;
+    }
+    return count;
+  }, [filteredSchedules, getRoomName]);
+
   if (loading && !initialSchedules) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -434,8 +454,11 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
           <FacultyFilter
             selectedFaculty={selectedFaculty}
             selectedInstrument={selectedInstrument}
+            selectedTeacherId={selectedTeacherId}
             onFacultySelect={setSelectedFaculty}
             onInstrumentSelect={setSelectedInstrument}
+            onTeacherSelect={setSelectedTeacherId}
+            teachers={teachers as any}
           />
 
           {/* 周数筛选器 */}
@@ -542,11 +565,11 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
 
             <div className="flex gap-2">
               {viewMode === 'week' ? (
-                // 周视图：显示周一到周日
+                // 周视图：显示周一到周日（节次数量按小组数显示）
                 Array.from({ length: 7 }).map((_, index) => {
                   const day = index + 1;
-                  const dayClasses = filteredSchedules.filter(s => s.dayOfWeek === day);
-                  const hasClasses = dayClasses.length > 0;
+                  const groupCount = groupCountByDay[day] ?? 0;
+                  const hasClasses = groupCount > 0;
 
                   return (
                     <button
@@ -559,23 +582,23 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                     >
                       <div>{dayLabels[index]}</div>
                       <div className="text-xs opacity-75">
-                        {dayClasses.length}节
+                        {groupCount}组
                       </div>
                     </button>
                   );
                 })
               ) : (
-                // 日视图：只显示当前选中的天
+                // 日视图：只显示当前选中的天（节次数量按小组数显示）
                 (() => {
                   const day = currentWeek;
-                  const dayClasses = filteredSchedules.filter(s => s.dayOfWeek === day);
+                  const groupCount = groupCountByDay[day] ?? 0;
                   return (
                     <button
                       className="px-6 py-2 rounded-lg text-sm font-medium bg-purple-100 text-purple-700"
                     >
                       <div>{dayLabels[day - 1] || `第${day}天`}</div>
                       <div className="text-xs opacity-75">
-                        {dayClasses.length}节
+                        {groupCount}组
                       </div>
                     </button>
                   );
@@ -617,7 +640,12 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                   </thead>
                   <tbody>
                     {PERIOD_CONFIG.map((period) => (
-                      <tr key={period.period} className="border-b border-gray-100 hover:bg-gray-50">
+                      <tr
+                        key={period.period}
+                        className={`border-b border-gray-100 hover:opacity-90 ${
+                          period.period % 2 === 1 ? 'bg-gray-50' : 'bg-white'
+                        }`}
+                      >
                         <td className="p-3">
                           <div className="flex items-center gap-1 text-sm text-gray-600">
                             <Clock className="w-4 h-4" />
@@ -652,7 +680,12 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                           时间
                         </th>
                         {PERIOD_CONFIG.filter(p => p.period <= 4).map((period) => (
-                          <th key={period.period} className="p-2 text-center text-sm font-medium text-gray-600">
+                          <th
+                            key={period.period}
+                            className={`p-2 text-center text-sm font-medium text-gray-600 ${
+                              period.period % 2 === 1 ? 'bg-gray-100' : 'bg-white'
+                            }`}
+                          >
                             <div>第{period.period}节</div>
                             <div className="text-xs text-gray-400 font-normal">
                               {period.startTime}-{period.endTime}
@@ -671,7 +704,12 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                         {PERIOD_CONFIG.filter(p => p.period <= 4).map((period) => {
                           const scheduleGroups = getGroupedSchedulesAt(currentWeek, period.period);
                           return (
-                            <td key={period.period} className="p-2 align-top">
+                            <td
+                              key={period.period}
+                              className={`p-2 align-top ${
+                                period.period % 2 === 1 ? 'bg-gray-50' : 'bg-white'
+                              }`}
+                            >
                               {renderScheduleGroups(scheduleGroups)}
                             </td>
                           );
@@ -690,7 +728,12 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                           时间
                         </th>
                         {PERIOD_CONFIG.filter(p => p.period >= 5).map((period) => (
-                          <th key={period.period} className="p-2 text-center text-sm font-medium text-gray-600">
+                          <th
+                            key={period.period}
+                            className={`p-2 text-center text-sm font-medium text-gray-600 ${
+                              period.period % 2 === 1 ? 'bg-gray-100' : 'bg-white'
+                            }`}
+                          >
                             <div>第{period.period}节</div>
                             <div className="text-xs text-gray-400 font-normal">
                               {period.startTime}-{period.endTime}
@@ -709,7 +752,12 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                         {PERIOD_CONFIG.filter(p => p.period >= 5).map((period) => {
                           const scheduleGroups = getGroupedSchedulesAt(currentWeek, period.period);
                           return (
-                            <td key={period.period} className="p-2 align-top">
+                            <td
+                              key={period.period}
+                              className={`p-2 align-top ${
+                                period.period % 2 === 1 ? 'bg-gray-50' : 'bg-white'
+                              }`}
+                            >
                               {renderScheduleGroups(scheduleGroups)}
                             </td>
                           );

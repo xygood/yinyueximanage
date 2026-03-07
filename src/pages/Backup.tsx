@@ -226,18 +226,8 @@ const Backup: React.FC = () => {
 
       if (selectedBackupTypes.importedBlockedTimes) {
         setBackupProgress('正在导出导入的禁排时间...');
-        if (USE_DATABASE) {
-          // 数据库模式下，从 blockedSlotService 获取所有禁排时间
-          const allBlockedSlots = await blockedSlotService.getAll();
-          // 筛选出从专业大课页面导入的禁排时间（可以通过特定标记或来源判断）
-          backupData.data.imported_blocked_times = allBlockedSlots.filter((slot: any) => 
-            slot.source === 'imported' || slot.imported_at
-          );
-        } else {
-          // 本地模式从 localStorage 获取
-          const importedBlockedTimesData = localStorage.getItem('music_scheduler_imported_blocked_times');
-          backupData.data.imported_blocked_times = importedBlockedTimesData ? JSON.parse(importedBlockedTimesData) : [];
-        }
+        const importedBlockedTimesData = localStorage.getItem('music_scheduler_imported_blocked_times');
+        backupData.data.imported_blocked_times = importedBlockedTimesData ? JSON.parse(importedBlockedTimesData) : [];
       }
 
       if (selectedBackupTypes.studentTeacherAssignments) {
@@ -457,25 +447,10 @@ const Backup: React.FC = () => {
         await roomService.importManyWithUpsert(backupData.data.rooms);
       }
 
-      // 恢复大课表数据（数据库模式下通过 largeClassScheduleService 处理）
+      // 恢复大课表数据
       setRestoreProgress('正在恢复大课表数据...');
       if (backupData.data.large_class_schedules) {
-        if (USE_DATABASE) {
-          for (const schedule of backupData.data.large_class_schedules) {
-            try {
-              await largeClassScheduleService.importSchedule(
-                schedule.file_name,
-                schedule.academic_year,
-                schedule.semester_label,
-                schedule.entries
-              );
-            } catch (error) {
-              console.warn('导入大课表失败:', error);
-            }
-          }
-        } else {
-          localStorage.setItem(STORAGE_KEYS.LARGE_CLASS_SCHEDULES, JSON.stringify(backupData.data.large_class_schedules));
-        }
+        localStorage.setItem(STORAGE_KEYS.LARGE_CLASS_SCHEDULES, JSON.stringify(backupData.data.large_class_schedules));
       }
 
       // 先恢复关联的课程数据（确保排课记录能正确判断类型）
@@ -612,48 +587,21 @@ const Backup: React.FC = () => {
         await teacherService.importManyWithUpsert(backupData.data.group_class_teachers);
       }
 
-      // 数据库模式下，以下数据已由后端 API 处理，不再保存到 localStorage
-      if (!USE_DATABASE) {
-        if (backupData.data.conflicts) {
-          localStorage.setItem(STORAGE_KEYS.CONFLICTS, JSON.stringify(backupData.data.conflicts));
-        }
-
-        if (backupData.data.users) {
-          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(backupData.data.users));
-        }
-
-        // 恢复周次配置数据
-        setRestoreProgress('正在恢复周次配置数据...');
-        if (backupData.data.semester_week_configs) {
-          localStorage.setItem(STORAGE_KEYS.SEMESTER_WEEK_CONFIGS, JSON.stringify(backupData.data.semester_week_configs));
-        }
-
-        // 恢复禁排时间数据
-        setRestoreProgress('正在恢复禁排时间数据...');
-        if (backupData.data.blocked_slots) {
-          localStorage.setItem(STORAGE_KEYS.BLOCKED_SLOTS, JSON.stringify(backupData.data.blocked_slots));
-        }
-
-        // 恢复专业大课页面导入的禁排时间数据
-        setRestoreProgress('正在恢复导入的禁排时间数据...');
-        if (backupData.data.imported_blocked_times) {
-          localStorage.setItem('music_scheduler_imported_blocked_times', JSON.stringify(backupData.data.imported_blocked_times));
-        }
-
-        // 恢复学生-教师分配数据
-        setRestoreProgress('正在恢复学生-教师分配数据...');
-        if (backupData.data.student_teacher_assignments) {
-          localStorage.setItem(STORAGE_KEYS.STUDENT_TEACHER_ASSIGNMENTS, JSON.stringify(backupData.data.student_teacher_assignments));
-        }
-
-        // 恢复学生-专业分配数据
-        setRestoreProgress('正在恢复学生-专业分配数据...');
-        if (backupData.data.student_major_assignments) {
-          localStorage.setItem(STORAGE_KEYS.STUDENT_MAJOR_ASSIGNMENTS, JSON.stringify(backupData.data.student_major_assignments));
-        }
+      if (backupData.data.conflicts) {
+        localStorage.setItem(STORAGE_KEYS.CONFLICTS, JSON.stringify(backupData.data.conflicts));
       }
 
-      // 恢复班级数据（数据库模式下通过 classService 处理）
+      if (backupData.data.users) {
+        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(backupData.data.users));
+      }
+
+      // 恢复周次配置数据
+      setRestoreProgress('正在恢复周次配置数据...');
+      if (backupData.data.semester_week_configs) {
+        localStorage.setItem(STORAGE_KEYS.SEMESTER_WEEK_CONFIGS, JSON.stringify(backupData.data.semester_week_configs));
+      }
+
+      // 恢复班级数据
       setRestoreProgress('正在恢复班级数据...');
       if (backupData.data.classes) {
         for (const cls of backupData.data.classes) {
@@ -663,6 +611,30 @@ const Backup: React.FC = () => {
             // 班级可能已存在，忽略错误
           }
         }
+      }
+
+      // 恢复禁排时间数据
+      setRestoreProgress('正在恢复禁排时间数据...');
+      if (backupData.data.blocked_slots) {
+        localStorage.setItem(STORAGE_KEYS.BLOCKED_SLOTS, JSON.stringify(backupData.data.blocked_slots));
+      }
+
+      // 恢复专业大课页面导入的禁排时间数据
+      setRestoreProgress('正在恢复导入的禁排时间数据...');
+      if (backupData.data.imported_blocked_times) {
+        localStorage.setItem('music_scheduler_imported_blocked_times', JSON.stringify(backupData.data.imported_blocked_times));
+      }
+
+      // 恢复学生-教师分配数据
+      setRestoreProgress('正在恢复学生-教师分配数据...');
+      if (backupData.data.student_teacher_assignments) {
+        localStorage.setItem(STORAGE_KEYS.STUDENT_TEACHER_ASSIGNMENTS, JSON.stringify(backupData.data.student_teacher_assignments));
+      }
+
+      // 恢复学生-专业分配数据
+      setRestoreProgress('正在恢复学生-专业分配数据...');
+      if (backupData.data.student_major_assignments) {
+        localStorage.setItem(STORAGE_KEYS.STUDENT_MAJOR_ASSIGNMENTS, JSON.stringify(backupData.data.student_major_assignments));
       }
 
       setRestoreResult({ success: true, message: '数据恢复成功！页面将在5秒后自动刷新，请查看控制台日志确认数据转换情况。' });

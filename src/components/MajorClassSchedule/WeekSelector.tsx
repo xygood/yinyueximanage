@@ -204,7 +204,7 @@ const WeekSelector: React.FC<WeekSelectorProps> = ({
               }`}
               disabled={isBlocked}
             >
-              <span>{week}{isScheduled && '✓'}{isBlocked && '✗'}{hasPartialBlock && !isBlocked && '⚠'}</span>
+              <span>{week}{selectedWeek === week && '✓'}{isBlocked && '✗'}{hasPartialBlock && !isBlocked && '⚠'}</span>
               <span className="text-[10px] opacity-75 mt-0.5">{getWeekDateRange(week)}</span>
             </button>
           );

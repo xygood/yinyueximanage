@@ -29,6 +29,8 @@ export interface ScheduleResult {
   originalSchedules: OriginalSchedule[];
   students: StudentInfo[];
   isLargeClass: boolean;
+  // 由课程名和学生专业综合推断出的具体乐器（器乐教研室使用）
+  specificInstrument?: string;
 }
 
 // 原始排课记录
@@ -58,6 +60,10 @@ export interface StudentInfo {
   name: string;
   student_id?: string;
   className?: string;
+  // 用于根据学生专业推断小组具体乐器
+  primary_instrument?: string;
+  instrument?: string;
+  secondary_instruments?: string[];
 }
 
 // 视图层数据类型（用于 FacultyScheduleView）
@@ -295,7 +301,7 @@ function convertToViewFormat(result: ScheduleResult): ScheduleClassView[] {
         courseName: result.courseName,
         studentName: student.name,
         instrument: result.courseType,
-        specificInstrument: extractSpecificInstrument(result.courseName),
+        specificInstrument: result.specificInstrument || extractSpecificInstrument(result.courseName),
         roomName: result.room_name || '',
         room_id: result.room_id,
         dayOfWeek: timeInfo.day,
@@ -420,12 +426,15 @@ function buildScheduleResults(
       };
     }
     
-    // 添加学生
-    const studentObj = {
+    // 添加学生（附带专业信息，便于后续推断具体乐器）
+    const studentObj: StudentInfo = {
       id: schedule.student_id,
       name: schedule.student_name || student?.name || '未知学生',
       student_id: student?.student_id || schedule.student_id,
-      className: student?.major_class || student?.class_name || schedule.class_name || ''
+      className: student?.major_class || (student as any)?.class_name || schedule.class_name || '',
+      primary_instrument: (student as any)?.primary_instrument || (student as any)?.instrument,
+      instrument: (student as any)?.instrument,
+      secondary_instruments: (student as any)?.secondary_instruments,
     };
     
     if (!groups[groupKey].students.some((s: any) => s.id === studentObj.id)) {
@@ -511,6 +520,32 @@ function buildScheduleResults(
       timeStrings.push(`第${weekRanges.join('、')}周 ${dayName} 第${periodText}节`);
     }
     
+    // 根据学生专业推断器乐类课程的具体乐器（如：古筝、竹笛、葫芦丝）
+    let specificInstrument: string | undefined = undefined;
+    if (group.courseType === '器乐') {
+      const instrumentCount: Record<string, number> = {};
+      for (const s of group.students as StudentInfo[]) {
+        const candidates: string[] = [];
+        if (s.primary_instrument) candidates.push(s.primary_instrument);
+        if (Array.isArray(s.secondary_instruments)) {
+          candidates.push(...s.secondary_instruments);
+        }
+        if (s.instrument) candidates.push(s.instrument);
+
+        for (const inst of candidates) {
+          if (!inst) continue;
+          // 过滤掉大类名称，只统计具体乐器
+          if (inst === '钢琴' || inst === '声乐' || inst === '器乐') continue;
+          instrumentCount[inst] = (instrumentCount[inst] || 0) + 1;
+        }
+      }
+
+      const sorted = Object.entries(instrumentCount).sort((a, b) => b[1] - a[1]);
+      if (sorted.length > 0) {
+        specificInstrument = sorted[0][0];
+      }
+    }
+
     // 获取课程编号和学分
     const credits = course?.credit || course?.credits || 1;
     
@@ -553,7 +588,8 @@ function buildScheduleResults(
       room_name: finalRoomName,
       originalSchedules: group.schedules,
       students: group.students,
-      isLargeClass: isMajorClassResult
+      isLargeClass: isMajorClassResult,
+      specificInstrument,
     });
   }
   

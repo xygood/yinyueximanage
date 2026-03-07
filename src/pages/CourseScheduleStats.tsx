@@ -104,7 +104,7 @@ interface TeacherGroupClassStats {
 }
 
 export default function CourseScheduleStats() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, onlineTeachers, refreshOnlineTeachers } = useAuth();
   const [loading, setLoading] = useState(true);
   const [teachers, setTeachers] = useState<any[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
@@ -147,7 +147,12 @@ export default function CourseScheduleStats() {
       }
     };
     loadData();
-  }, []);
+    
+    // 刷新在线教师列表
+    if (refreshOnlineTeachers) {
+      refreshOnlineTeachers();
+    }
+  }, [refreshOnlineTeachers]);
 
   // 计算每位教师的排课统计
   const teacherStats = useMemo(() => {
@@ -434,7 +439,7 @@ export default function CourseScheduleStats() {
         const course = courses.find(c => c.id === courseId);
         if (!course) return;
 
-        // 计算已排课时（每个排课记录算2课时，因为是连堂）
+        // 计算已排课时（与排课结果页保持一致：1 个节次记为 1 课时）
         let courseScheduledHours = 0;
         const uniqueTimeSlots = new Set<string>();
         schedules.forEach(schedule => {
@@ -442,7 +447,7 @@ export default function CourseScheduleStats() {
           const timeKey = `${schedule.day_of_week}-${schedule.period}-${schedule.start_week || schedule.week_number}`;
           if (!uniqueTimeSlots.has(timeKey)) {
             uniqueTimeSlots.add(timeKey);
-            courseScheduledHours += 2; // 每节课2课时（连堂）
+            courseScheduledHours += 1;
           }
         });
         individualScheduled += courseScheduledHours;
@@ -1166,6 +1171,32 @@ export default function CourseScheduleStats() {
           </div>
         </div>
 
+        {/* 在线教师显示 - 仅管理员可见 */}
+        {onlineTeachers && onlineTeachers.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600">在线教师：</span>
+            <div className="flex items-center gap-1 flex-wrap">
+              {onlineTeachers.map((t) => (
+                <div 
+                  key={t.id}
+                  className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs ${
+                    t.id === user?.id 
+                      ? 'bg-green-100 text-green-700 border border-green-300' 
+                      : 'bg-blue-100 text-blue-700 border border-blue-300'
+                  }`}
+                  title={`${t.name} - ${t.faculty_name || '未知教研室'}`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${
+                    t.status === 'online' ? 'bg-green-500' : 
+                    t.status === 'busy' ? 'bg-yellow-500' : 'bg-gray-400'
+                  }`}></span>
+                  <span>{t.name}</span>
+                  {t.id === user?.id && <span className="text-green-600">(我)</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 教师列表 */}

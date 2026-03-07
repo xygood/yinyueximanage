@@ -87,19 +87,38 @@ export const BlockedTimeProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
       // 同时保存到旧缓存（用于 ArrangeClass 兼容）
       // 转换数据格式以兼容 ArrangeClass 的读取逻辑
-      const legacyData = data.map(item => ({
-        id: item.id,
-        class_name: item.class_associations?.map((a: any) => a.name).join(', ') || '',
-        weeks: item.weeks,
-        day: item.day_of_week,
-        periods: item.periods,
-        reason: item.reason,
-        source_type: item.source_type,
-        teacher_name: item.teacher_name,
-        course_name: item.course_name,
-        imported_at: item.imported_at
-      }));
-      localStorage.setItem(LEGACY_CACHE_KEY, JSON.stringify(legacyData));
+      const legacyData = data.map(item => {
+        // 处理班级名称，确保格式一致（添加"音乐学"前缀）
+        const classNames = item.class_associations?.map((a: any) => {
+          const name = a.name || '';
+          // 如果名称已经是"音乐学XXX"格式，直接使用
+          if (name.startsWith('音乐学')) {
+            return name;
+          }
+          // 否则添加"音乐学"前缀
+          return `音乐学${name}`;
+        }) || [];
+        
+        return {
+          id: item.id,
+          class_name: classNames.join(', '),
+          weeks: item.weeks,
+          day: item.day_of_week,
+          periods: item.periods,
+          reason: item.reason,
+          source_type: item.source_type,
+          teacher_name: item.teacher_name,
+          course_name: item.course_name,
+          imported_at: item.imported_at
+        };
+      });
+      // 确保旧缓存一定被写入，即使数据为空也要写入空数组
+      try {
+        localStorage.setItem(LEGACY_CACHE_KEY, JSON.stringify(legacyData));
+        console.log('旧缓存已保存:', LEGACY_CACHE_KEY, legacyData.length, '条');
+      } catch (legacyError) {
+        console.error('保存旧缓存失败:', legacyError);
+      }
 
       console.log('禁排数据已同步到两个缓存:', data.length, '条');
     } catch (error) {

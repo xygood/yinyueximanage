@@ -5,8 +5,8 @@ import { generateId } from './excel';
 const PERIODS_CONFIG: { period: number; startTime: string; endTime: string }[] = [
   { period: 1, startTime: '08:10', endTime: '08:55' },
   { period: 2, startTime: '09:05', endTime: '09:50' },
-  { period: 3, startTime: '10:20', endTime: '11:05' },
-  { period: 4, startTime: '11:15', endTime: '12:00' },
+  { period: 3, startTime: '10:05', endTime: '10:50' },
+  { period: 4, startTime: '10:55', endTime: '11:40' },
   { period: 5, startTime: '13:45', endTime: '14:30' },
   { period: 6, startTime: '14:40', endTime: '15:25' },
   { period: 7, startTime: '15:40', endTime: '16:25' },

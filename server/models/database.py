@@ -32,7 +32,9 @@ def init_db():
     from models import (
         Faculty, Teacher, Student, Course, Room, 
         ScheduledClass, BlockedSlot, Class,
-        User, StudentTeacherAssignment, LargeClassSchedule, SemesterWeekConfig
+        User, StudentTeacherAssignment, LargeClassSchedule, SemesterWeekConfig,
+        ImportedBlockedTime, TeachingCalendarHeader, TeachingCalendarEntry,
+        GradeTeachingContent
     )
     Base.metadata.create_all(bind=engine)
 

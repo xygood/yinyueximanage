@@ -138,6 +138,8 @@ TimeGrid 内对“格子是否禁排”的判定来源比较复杂，主要包�
 
 > 禁排逻辑的“数据源”分散在多个列表中（blockedSlots / importedBlockedTimes / largeClassEntries），并且各自字段结构不同，这是后续重构/统一数据模型的重点方向。
 
+**禁排原因显示错误（已修复）**：若配置禁排使用“特定周次+星期”即 `specific_week_days`（如行政例会仅周三），后端可能同时存在 `week_number`。此前“全周禁排”分支在 `slot.week_number === selectedWeek` 时即成立，导致该周所有星期都被误判为禁排、禁排原因显示为“行政例会”的周次/节次错误。修复方式：仅当 `(!slot.specific_week_days || slot.specific_week_days.length === 0)` 时才走“全周禁排”逻辑，避免与“特定周次+星期”冲突。
+
 ---
 
 ## 6. 冲突检测逻辑

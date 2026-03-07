@@ -106,7 +106,7 @@ interface TeacherGroupClassStats {
 }
 
 export default function AdminDashboard() {
-  const { user, teacher, isAdmin } = useAuth();
+  const { user, teacher, isAdmin, onlineTeachers, refreshOnlineTeachers } = useAuth();
   const { showInfo } = useNotification();
   const { allData: blockedTimesData, refreshBlockedTimes, hasLoaded: blockedTimesLoaded, isLoading: blockedTimesLoading } = useBlockedTime();
   
@@ -884,7 +884,47 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* 控制按钮已移除 */}
+        {/* 在线教师模块（仅管理员可见） */}
+        {isAdmin && onlineTeachers && onlineTeachers.length > 0 && (
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600">在线教师：</span>
+              <div className="flex items-center gap-1 flex-wrap max-w-md justify-end">
+                {onlineTeachers.map((t) => (
+                  <div
+                    key={t.id}
+                    className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs ${
+                      t.id === user?.id
+                        ? 'bg-green-100 text-green-700 border border-green-300'
+                        : 'bg-blue-100 text-blue-700 border border-blue-300'
+                    }`}
+                    title={`${t.name} - ${t.faculty_name || '未知教研室'}`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        t.status === 'online'
+                          ? 'bg-green-500'
+                          : t.status === 'busy'
+                          ? 'bg-yellow-500'
+                          : 'bg-gray-400'
+                      }`}
+                    ></span>
+                    <span>{t.name}</span>
+                    {t.id === user?.id && <span className="text-green-600">(我)</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={refreshOnlineTeachers}
+              className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800"
+            >
+              <RefreshCw className="w-3 h-3" />
+              手动刷新在线列表
+            </button>
+          </div>
+        )}
       </div>
 
 
@@ -2118,8 +2158,8 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      {/* 禁排时间管理模块 */}
-      {isAdmin && (
+      {/* 禁排时间管理模块 - 管理员和教师都可见 */}
+      {(isAdmin || teacher) && (
         <div className="mt-8">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
@@ -2143,7 +2183,7 @@ export default function AdminDashboard() {
               </button>
             </div>
           </div>
-          <BlockedTimesImport />
+          {isAdmin && <BlockedTimesImport />}
           <div className="mt-4">
             <BlockedTimesList />
           </div>

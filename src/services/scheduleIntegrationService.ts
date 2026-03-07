@@ -462,8 +462,8 @@ export class ScheduleIntegrationService {
     const timeMap: Record<number, { start: string; end: string }> = {
       1: { start: '08:10', end: '08:55' },
       2: { start: '09:05', end: '09:50' },
-      3: { start: '10:20', end: '11:05' },
-      4: { start: '11:15', end: '12:00' },
+      3: { start: '10:05', end: '10:50' },
+      4: { start: '10:55', end: '11:40' },
       5: { start: '13:45', end: '14:30' },
       6: { start: '14:40', end: '15:25' },
       7: { start: '15:40', end: '16:25' },
@@ -555,8 +555,8 @@ export class ScheduleIntegrationService {
       return {
         dayOfWeek: 2, // 周二
         period: 3,     // 第3节
-        startTime: '10:20',
-        endTime: '11:05'
+        startTime: '10:05',
+        endTime: '10:50'
       };
     }
 
@@ -645,8 +645,8 @@ export class ScheduleIntegrationService {
     return {
       dayOfWeek: 3, // 周三
       period: 3,    // 第3节
-      startTime: '10:20',
-      endTime: '11:05'
+      startTime: '10:05',
+      endTime: '10:50'
     };
   }
 

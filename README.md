@@ -40,15 +40,19 @@ AIGC:
 
 ## 🚀 快速开始
 
+**在其他设备拉取后**，请按 [STARTUP_GUIDE.md](STARTUP_GUIDE.md) 配置 MySQL、前端与后端后运行。
+
 ```bash
 # 安装依赖
 pnpm install
+# 或 npm install
 
 # 配置环境变量
 cp .env.example .env
 
 # 启动开发服务器
 pnpm dev
+# 或 npm run dev
 ```
 
 ## 📊 Excel导入格式

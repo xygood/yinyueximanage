@@ -27,6 +27,7 @@ import Backup from './pages/Backup';
 import WeekConfig from './pages/WeekConfig';
 import MajorClassSchedule from './pages/MajorClassSchedule_Simple';
 import CourseScheduleStats from './pages/CourseScheduleStats';
+import TeachingCalendarPage from './pages/TeachingCalendar';
 
 import LargeClass from './pages/LargeClass';
 import OperationLogs from './pages/OperationLogs';
@@ -159,6 +160,8 @@ function AppRoutes() {
         <Route path="backup" element={<Backup />} />
         {/* 学期周次配置 */}
         <Route path="week-config" element={<WeekConfig />} />
+        {/* 教学日历 */}
+        <Route path="teaching-calendar" element={<TeachingCalendarPage />} />
         {/* 测试页面 */}
         <Route path="test-dashboard" element={<TestDashboard />} />
         <Route path="course-assignment-test" element={<CourseAssignmentTest />} />

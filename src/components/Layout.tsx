@@ -2,7 +2,33 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { usePageTitle } from '../hooks/usePageTitle';
 import { NotificationContainer } from './NotificationComponents';
-import { Home, Users, BookOpen, MapPin, Calendar, Settings, LogOut, Music, ChevronDown, User, BarChart3, ClipboardList, Award, FlaskConical, Upload, UserPlus, CalendarPlus, Download, GraduationCap, Database, FolderOpen, ChevronRight, DatabaseBackup, Zap, Lightbulb } from 'lucide-react';
+import {
+  Home,
+  Users,
+  BookOpen,
+  MapPin,
+  Calendar,
+  Settings,
+  LogOut,
+  Music,
+  ChevronDown,
+  User,
+  BarChart3,
+  ClipboardList,
+  Award,
+  FlaskConical,
+  Upload,
+  UserPlus,
+  CalendarPlus,
+  Download,
+  GraduationCap,
+  Database,
+  FolderOpen,
+  ChevronRight,
+  DatabaseBackup,
+  Zap,
+  Lightbulb,
+} from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { STORAGE_KEYS, courseService } from '../services';
 import websocketService from '../services/websocketService';
@@ -116,10 +142,17 @@ export default function Layout() {
   // 教师可见的核心功能菜单
   const teacherMenuItems = [
     { path: '/', icon: Home, label: '数据统计' },
+    { path: '/teaching-calendar', icon: Calendar, label: '教学日历' },
     // 专业小课：教师有专业小课或者是管理员才显示
-    ...(hasIndividualCourses || isAdmin ? [{ path: '/arrange-class', icon: CalendarPlus, label: '专业小课' }] : []),
+    ...(hasIndividualCourses || isAdmin
+      ? [{ path: '/arrange-class', icon: CalendarPlus, label: '专业小课' }]
+      : []),
     // 专业大课：教师有专业大课或者是管理员才显示
-    ...(hasMajorCourses || isAdmin ? [{ path: '/major-class-schedule', icon: Music, label: '专业大课' }] : []),
+    ...(hasMajorCourses || isAdmin
+      ? [{ path: '/major-class-schedule', icon: Music, label: '专业大课' }]
+      : []),
+    // 通适大课：仅管理员可见
+    ...(isAdmin ? [{ path: '/large-class', icon: BookOpen, label: '通适大课' }] : []),
   ];
 
   // 管理员专用菜单 - 基础信息管理
@@ -147,7 +180,6 @@ export default function Layout() {
   const adminToolsMenuItems = [
     { path: '/week-config', icon: Calendar, label: '周次配置' },
     { path: '/backup', icon: Database, label: '数据备份' },
-    { path: '/large-class', icon: BookOpen, label: '通适大课' },
     { path: '/operation-logs', icon: ClipboardList, label: '操作日志' },
   ];
 

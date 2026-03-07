@@ -52,13 +52,13 @@ export const isWeekBlocked = (
     }
     
     if (slot.type === 'specific') {
-      // 检查特定周次禁排
+      // 仅当“整周禁排”时才返回 true。specific_week_days 表示“特定周次的特定星期”禁排，属于部分禁排，不算全周禁排
+      if (slot.specific_week_days && slot.specific_week_days.length > 0) {
+        return false; // 有 specific_week_days 时只禁排部分天，不算全周禁排
+      }
+      // 无 specific_week_days 时，week_number 表示整周禁排
       if (slot.week_number === week) {
         return true;
-      }
-      // 检查特定周次的星期几禁排
-      if (slot.specific_week_days) {
-        return slot.specific_week_days.some(wd => wd.week === week);
       }
     }
     return false;

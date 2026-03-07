@@ -11,10 +11,30 @@ from .user import User
 from .student_teacher_assignment import StudentTeacherAssignment
 from .large_class_schedule import LargeClassSchedule
 from .semester_week_config import SemesterWeekConfig
+from .imported_blocked_time import ImportedBlockedTime
+from .teaching_calendar import TeachingCalendarHeader, TeachingCalendarEntry
+from .grade_teaching_content import GradeTeachingContent
 
 __all__ = [
-    'Base', 'engine', 'SessionLocal', 'get_db', 'init_db',
-    'Faculty', 'Teacher', 'Student', 'Course', 'Room',
-    'ScheduledClass', 'BlockedSlot', 'Class', 'User',
-    'StudentTeacherAssignment', 'LargeClassSchedule', 'SemesterWeekConfig'
+    "Base",
+    "engine",
+    "SessionLocal",
+    "get_db",
+    "init_db",
+    "Faculty",
+    "Teacher",
+    "Student",
+    "Course",
+    "Room",
+    "ScheduledClass",
+    "BlockedSlot",
+    "Class",
+    "User",
+    "StudentTeacherAssignment",
+    "LargeClassSchedule",
+    "SemesterWeekConfig",
+    "ImportedBlockedTime",
+    "TeachingCalendarHeader",
+    "TeachingCalendarEntry",
+    "GradeTeachingContent",
 ]

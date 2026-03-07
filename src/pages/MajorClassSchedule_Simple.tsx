@@ -1974,6 +1974,7 @@ export default function MajorClassSchedule() {
       if (selectedCourses.length > 1) {
         // 合班上课：为每个选中的课程创建排课记录
         for (const courseStatus of courseScheduleStatuses.filter(status => selectedCourses.includes(status.id))) {
+          const course = courses.find(c => c.id === courseStatus.course_id);
           for (const slot of uniqueTimeSlots) {
             newSchedules.push({
               id: uuidv4(),
@@ -1985,6 +1986,8 @@ export default function MajorClassSchedule() {
               period: slot.period,
               start_week: slot.week,
               end_week: slot.week,
+              teacher_id: course?.teacher_id || courseStatus.teacher_id || '',
+              teacher_name: course?.teacher_name || courseStatus.teacher_name || '',
               created_at: new Date().toISOString(),
               status: 'draft'
             });
@@ -1992,6 +1995,7 @@ export default function MajorClassSchedule() {
         }
       } else {
         // 单个课程：为当前课程创建排课记录
+        const course = courses.find(c => c.id === currentCourse.course_id);
         for (const slot of uniqueTimeSlots) {
           newSchedules.push({
             id: uuidv4(),
@@ -2003,6 +2007,8 @@ export default function MajorClassSchedule() {
             period: slot.period,
             start_week: slot.week,
             end_week: slot.week,
+            teacher_id: course?.teacher_id || currentCourse.teacher_id || '',
+            teacher_name: course?.teacher_name || currentCourse.teacher_name || '',
             created_at: new Date().toISOString(),
             status: 'draft'
           });
@@ -2241,6 +2247,7 @@ export default function MajorClassSchedule() {
       if (selectedCourses.length > 1) {
         // 合班上课：为每个选中的课程创建排课记录
         for (const courseStatus of courseScheduleStatuses.filter(status => selectedCourses.includes(status.id))) {
+          const course = courses.find(c => c.id === courseStatus.course_id);
           for (const slot of uniqueTimeSlotsList) {
             newSchedules.push({
               id: uuidv4(),
@@ -2252,6 +2259,8 @@ export default function MajorClassSchedule() {
               period: slot.period,
               start_week: slot.week,
               end_week: slot.week,
+              teacher_id: course?.teacher_id || courseStatus.teacher_id || '',
+              teacher_name: course?.teacher_name || courseStatus.teacher_name || '',
               created_at: new Date().toISOString(),
               status: 'draft'
             });
@@ -2259,6 +2268,7 @@ export default function MajorClassSchedule() {
         }
       } else {
         // 单个课程：为当前课程创建排课记录
+        const course = courses.find(c => c.id === currentCourse.course_id);
         for (const slot of uniqueTimeSlotsList) {
           newSchedules.push({
             id: uuidv4(),
@@ -2270,6 +2280,8 @@ export default function MajorClassSchedule() {
             period: slot.period,
             start_week: slot.week,
             end_week: slot.week,
+            teacher_id: course?.teacher_id || currentCourse.teacher_id || '',
+            teacher_name: course?.teacher_name || currentCourse.teacher_name || '',
             created_at: new Date().toISOString(),
             status: 'draft'
           });
@@ -3252,7 +3264,10 @@ export default function MajorClassSchedule() {
                 scheduledClasses={scheduledClasses}
                 currentCourse={currentCourse}
                 selectedClass={selectedClass}
+                selectedRoom={selectedRoom}
                 classes={classes}
+                courses={courses}
+                rooms={rooms}
                 blockedSlots={blockedSlots}
                 largeClassEntries={largeClassEntries}
                 importedBlockedTimes={importedBlockedTimes}
@@ -3368,36 +3383,71 @@ export default function MajorClassSchedule() {
                         return false;
                       }
                       return true;
-                    }).sort((a, b) => {
-                      // 按星期排序
-                      return a.day - b.day;
                     });
+
+                    // 合并逻辑（两遍）：
+                    // 1. 禁排原因、星期、节次相同时，将周次合并到一行
+                    // 2. 禁排原因、节次、周次相同时，将星期合并到一行（如劳动节放假 周五、周六、周日）
+                    const periodsKey = (p: number[]) => [...(p || [])].sort((a, b) => a - b).join(',');
+                    const weeksKey = (w: number[]) => [...(w || [])].sort((a, b) => a - b).join(',');
+                    type MergeItem = { class_name: string; weeks: number[]; days: number[]; periods: number[]; reason: string };
+                    // 第一遍：按 (班级, 星期, 节次, 原因) 合并周次
+                    const mergeMap1 = new Map<string, MergeItem>();
+                    filteredData.forEach(item => {
+                      const key = `${item.class_name}|${item.day}|${periodsKey(item.periods || [])}|${item.reason || ''}`;
+                      if (mergeMap1.has(key)) {
+                        const existing = mergeMap1.get(key)!;
+                        const mergedWeeks = [...new Set([...existing.weeks, ...(item.weeks || [])])].sort((a, b) => a - b);
+                        mergeMap1.set(key, { ...existing, weeks: mergedWeeks });
+                      } else {
+                        mergeMap1.set(key, {
+                          class_name: item.class_name,
+                          weeks: [...(item.weeks || [])].sort((a, b) => a - b),
+                          days: [item.day],
+                          periods: [...(item.periods || [])].sort((a, b) => a - b),
+                          reason: item.reason || ''
+                        });
+                      }
+                    });
+                    const afterPass1 = Array.from(mergeMap1.values());
+                    // 第二遍：按 (班级, 周次, 节次, 原因) 合并星期
+                    const mergeMap2 = new Map<string, MergeItem>();
+                    afterPass1.forEach(item => {
+                      const key = `${item.class_name}|${weeksKey(item.weeks)}|${periodsKey(item.periods)}|${item.reason}`;
+                      if (mergeMap2.has(key)) {
+                        const existing = mergeMap2.get(key)!;
+                        const mergedDays = [...new Set([...existing.days, ...item.days])].sort((a, b) => a - b);
+                        mergeMap2.set(key, { ...existing, days: mergedDays });
+                      } else {
+                        mergeMap2.set(key, { ...item });
+                      }
+                    });
+                    const mergedData = Array.from(mergeMap2.values()).sort((a, b) => a.days[0] - b.days[0] || a.weeks[0] - b.weeks[0]);
                     
                     // 计算分页
-                    const totalItems = filteredData.length;
+                    const totalItems = mergedData.length;
                     const totalPages = Math.ceil(totalItems / blockedTimesPageSize);
                     const startIndex = (blockedTimesPage - 1) * blockedTimesPageSize;
                     const endIndex = startIndex + blockedTimesPageSize;
-                    const paginatedData = filteredData.slice(startIndex, endIndex);
+                    const paginatedData = mergedData.slice(startIndex, endIndex);
                     
                     return (
                       <>
-                        {paginatedData.map((item, index) => (
-                          <tr key={index}>
-                            <td className="px-4 py-2 text-sm text-gray-900">{item.class_name}</td>
-                            <td className="px-4 py-2 text-sm text-gray-900">{item.weeks.join(', ')}</td>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              {item.day === 1 ? '周一' :
-                               item.day === 2 ? '周二' :
-                               item.day === 3 ? '周三' :
-                               item.day === 4 ? '周四' :
-                               item.day === 5 ? '周五' :
-                               item.day === 6 ? '周六' : '周日'}
-                            </td>
-                            <td className="px-4 py-2 text-sm text-gray-900">{item.periods.join(', ')}</td>
-                            <td className="px-4 py-2 text-sm text-gray-900">{item.reason}</td>
-                          </tr>
-                        ))}
+                        {paginatedData.map((item, index) => {
+                          const dayNames: Record<number, string> = {
+                            1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日'
+                          };
+                          const dayDisplay = (item.days || []).map((d: number) => dayNames[d] || '').filter(Boolean).join('、');
+                          return (
+                            <tr key={index}>
+                              <td className="px-4 py-2 text-sm text-gray-900">{item.class_name}</td>
+                              <td className="px-4 py-2 text-sm text-gray-900">{item.weeks.join(', ')}</td>
+                              <td className="px-4 py-2 text-sm text-gray-900">{dayDisplay}</td>
+                              <td className="px-4 py-2 text-sm text-gray-900">{item.periods.join(', ')}</td>
+                              <td className="px-4 py-2 text-sm text-gray-900">{item.reason}</td>
+                            </tr>
+                          );
+                        })}
                         
                         {/* 分页控件 */}
                         {totalPages >= 1 && (

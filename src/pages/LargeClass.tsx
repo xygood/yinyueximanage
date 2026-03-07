@@ -126,31 +126,34 @@ export default function LargeClass() {
     <div className="animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold text-gray-900">通适大课</h1>
-        <div className="flex items-center gap-3">
-          {/* 导入大课表按钮 */}
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleLargeClassFileUpload}
-            accept=".xlsx,.xls"
-            className="hidden"
-          />
-          <button
-            onClick={triggerFileInput}
-            disabled={isImporting}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <Upload className="w-4 h-4" />
-            {isImporting ? '导入中...' : '导入大课表'}
-          </button>
-          <button
-            onClick={handleClearAll}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <XCircle className="w-4 h-4" />
-            清除大课表数据
-          </button>
-        </div>
+        {/* 只有管理员显示操作按钮 */}
+        {isAdmin && (
+          <div className="flex items-center gap-3">
+            {/* 导入大课表按钮 */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleLargeClassFileUpload}
+              accept=".xlsx,.xls"
+              className="hidden"
+            />
+            <button
+              onClick={triggerFileInput}
+              disabled={isImporting}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Upload className="w-4 h-4" />
+              {isImporting ? '导入中...' : '导入大课表'}
+            </button>
+            <button
+              onClick={handleClearAll}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <XCircle className="w-4 h-4" />
+              清除大课表数据
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 导入状态提示 */}

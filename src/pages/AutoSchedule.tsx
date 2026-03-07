@@ -198,7 +198,7 @@ export default function AutoSchedule() {
             <h2 className="section-title flex items-center gap-2"><Settings className="w-5 h-5 text-purple-600" />排课参数</h2>
             <div className="space-y-4">
               <div><label className="label">偏好排课日期</label><div className="flex gap-1 flex-wrap">{days.map((day, index) => (<button key={day} onClick={() => toggleDay(index + 1)} className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${params.preferredDays.includes(index + 1) ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{day}</button>))}</div></div>
-              <div><label className="label">节次说明</label><div className="text-sm text-gray-600 space-y-1"><p>上午：第1-2节（08:10-09:50），第3-4节（10:20-12:00）</p><p>下午：第5-6节（13:45-15:25），第7-8节（15:40-17:20）</p><p>晚上：第9-10节（18:30-20:10）</p><p className="text-gray-500">两节课之间休息10分钟</p></div></div>
+              <div><label className="label">节次说明</label><div className="text-sm text-gray-600 space-y-1"><p>上午：第1-2节（08:10-09:50），第3-4节（10:05-11:40）</p><p>下午：第5-6节（13:45-15:25），第7-8节（15:40-17:20）</p><p>晚上：第9-10节（18:30-20:10）</p><p className="text-gray-500">两节课之间休息10分钟</p></div></div>
               <button onClick={handleAutoSchedule} disabled={scheduling || courses.length === 0 || rooms.length === 0} className="w-full btn-primary py-3 flex items-center justify-center gap-2 disabled:opacity-50">{scheduling ? <><RefreshCw className="w-5 h-5 animate-spin" />排课中...</> : <><Play className="w-5 h-5" />开始自动排课</>}</button>
             </div>
           </div>

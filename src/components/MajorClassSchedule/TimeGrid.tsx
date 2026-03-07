@@ -11,7 +11,10 @@ interface TimeGridProps {
   scheduledClasses: any[];
   currentCourse: any;
   selectedClass: string;
+  selectedRoom: string;
   classes: any[];
+  courses: any[];
+  rooms: any[];
   blockedSlots: any[];
   largeClassEntries: any[];
   importedBlockedTimes: any[];
@@ -37,7 +40,10 @@ const TimeGrid: React.FC<TimeGridProps> = ({
   scheduledClasses,
   currentCourse,
   selectedClass,
+  selectedRoom,
   classes,
+  courses,
+  rooms,
   blockedSlots,
   largeClassEntries,
   importedBlockedTimes,
@@ -239,43 +245,41 @@ const TimeGrid: React.FC<TimeGridProps> = ({
         
         // 检查每周循环禁排
         if (slot.type === 'recurring' && slot.day_of_week === day.value) {
-            if (slot.start_period && slot.end_period) {
+            if (slot.start_period != null && slot.end_period != null) {
               return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                      (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
             }
-            return true; // 如果没有指定节次，则整个时段都禁排
+            return false; // 未指定节次范围时不禁排，避免行政例会等误显示为整日禁排
           }
         
         // 检查特定周次的特定星期禁排
         if (slot.type === 'specific' && slot.specific_week_days) {
           const isSpecificWeekDay = slot.specific_week_days?.some(wd => wd.week === selectedWeek && wd.day === day.value) || false;
           if (isSpecificWeekDay) {
-            if (slot.start_period && slot.end_period) {
+            if (slot.start_period != null && slot.end_period != null) {
               return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                      (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
             }
-            return true; // 如果没有指定节次，则整个时段都禁排
+            return false; // 未指定节次范围时不禁排
           }
         }
         
         // 检查特定周次的特定天禁排
         if (slot.type === 'specific' && slot.week_number === selectedWeek && slot.day_of_week === day.value) {
-          // 如果指定了节次范围，检查节次是否匹配
-          if (slot.start_period && slot.end_period) {
+          if (slot.start_period != null && slot.end_period != null) {
             return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                    (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
           }
-          return true; // 没有指定节次范围，整个时段都禁排
+          return false; // 未指定节次范围时不禁排
         }
         
-        // 检查全周禁排
-        if (slot.type === 'specific' && slot.week_number === selectedWeek) {
-          // 如果指定了节次范围，检查节次是否匹配
-          if (slot.start_period && slot.end_period) {
+        // 检查全周禁排（仅当未使用 specific_week_days 时）
+        if (slot.type === 'specific' && slot.week_number === selectedWeek && (!slot.specific_week_days || slot.specific_week_days.length === 0)) {
+          if (slot.start_period != null && slot.end_period != null) {
             return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                    (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
           }
-          return true; // 没有指定节次范围，整个时段都禁排
+          return false; // 未指定节次范围时不禁排
         }
         
         return false;
@@ -350,6 +354,17 @@ const TimeGrid: React.FC<TimeGridProps> = ({
                     return (item.periods.includes(startPeriod) || item.periods.includes(endPeriod));
                   });
                   
+                  // 检查教室占用：选择教室后，该教室已被其他课程占用的时段显示为禁排
+                  const isBlockedByRoomConflict = selectedRoom ? (scheduledClasses || []).some(schedule => {
+                    // 排除当前课程的排课记录（编辑时保留已排时段可选）
+                    if (currentCourse && schedule.course_id === currentCourse.course_id) {
+                      return false;
+                    }
+                    if (schedule.room_id !== selectedRoom) return false;
+                    if (schedule.week_number !== selectedWeek || schedule.day_of_week !== day.value) return false;
+                    return schedule.period === startPeriod || schedule.period === endPeriod;
+                  }) : false;
+                  
                   // 获取禁排原因
                   const getBlockReason = (): string => {
                     // 检查传统禁排时段
@@ -381,54 +396,52 @@ const TimeGrid: React.FC<TimeGridProps> = ({
                       
                       // 检查每周循环禁排
                       if (slot.type === 'recurring' && slot.day_of_week === day.value) {
-                        if (slot.start_period && slot.end_period) {
+                        if (slot.start_period != null && slot.end_period != null) {
                           if ((startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                               (endPeriod >= slot.start_period && endPeriod <= slot.end_period)) {
                             return true;
                           }
-                          return false; // 有指定节次范围但不匹配
+                          return false;
                         }
-                        return true; // 没有指定节次范围，整个星期都禁排
+                        return false; // 未指定节次范围时不禁排
                       }
                       
                       // 检查特定周次的特定星期禁排
                       if (slot.type === 'specific' && slot.specific_week_days) {
                         const isSpecificWeekDay = slot.specific_week_days?.some((wd: any) => wd.week === selectedWeek && wd.day === day.value) || false;
                         if (isSpecificWeekDay) {
-                          if (slot.start_period && slot.end_period) {
+                          if (slot.start_period != null && slot.end_period != null) {
                             if ((startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                                 (endPeriod >= slot.start_period && endPeriod <= slot.end_period)) {
                               return true;
                             }
                           }
-                          return true;
+                          return false; // 未指定节次范围时不禁排
                         }
                       }
                       
                       // 检查特定周次的特定天禁排
                       if (slot.type === 'specific' && slot.week_number === selectedWeek && slot.day_of_week === day.value) {
-                        // 如果指定了节次范围，检查节次是否匹配
-                        if (slot.start_period && slot.end_period) {
+                        if (slot.start_period != null && slot.end_period != null) {
                           if ((startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                               (endPeriod >= slot.start_period && endPeriod <= slot.end_period)) {
                             return true;
                           }
-                          return false; // 有指定节次范围但不匹配
+                          return false;
                         }
-                        return true; // 没有指定节次范围，整个时段都禁排
+                        return false; // 未指定节次范围时不禁排
                       }
                       
-                      // 检查全周禁排
-                      if (slot.type === 'specific' && slot.week_number === selectedWeek) {
-                        // 如果指定了节次范围，检查节次是否匹配
-                        if (slot.start_period && slot.end_period) {
+                      // 检查全周禁排（仅当未使用 specific_week_days 时）
+                      if (slot.type === 'specific' && slot.week_number === selectedWeek && (!slot.specific_week_days || slot.specific_week_days.length === 0)) {
+                        if (slot.start_period != null && slot.end_period != null) {
                           if ((startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                               (endPeriod >= slot.start_period && endPeriod <= slot.end_period)) {
                             return true;
                           }
-                          return false; // 有指定节次范围但不匹配
+                          return false;
                         }
-                        return true; // 没有指定节次范围，整个时段都禁排
+                        return false; // 未指定节次范围时不禁排
                       }
                       
                       return false;
@@ -489,6 +502,20 @@ const TimeGrid: React.FC<TimeGridProps> = ({
                       return '您在该时段已有其他课程安排';
                     }
 
+                    // 检查教室占用
+                    const roomConflict = selectedRoom ? (scheduledClasses || []).find((schedule: any) => {
+                      if (currentCourse && schedule.course_id === currentCourse.course_id) return false;
+                      if (schedule.room_id !== selectedRoom) return false;
+                      return schedule.week_number === selectedWeek && 
+                             schedule.day_of_week === day.value && 
+                             (schedule.period === startPeriod || schedule.period === endPeriod);
+                    }) : null;
+                    
+                    if (roomConflict) {
+                      const conflictCourse = (courses || []).find((c: any) => c.id === roomConflict.course_id);
+                      return `教室已被占用（${conflictCourse?.course_name || '未知课程'}）`;
+                    }
+
                     return '该时段被禁排';
                   };
                   
@@ -527,43 +554,41 @@ const TimeGrid: React.FC<TimeGridProps> = ({
                         
                         // 检查每周循环禁排
                         if (slot.type === 'recurring' && slot.day_of_week === day.value) {
-                          if (slot.start_period && slot.end_period) {
+                          if (slot.start_period != null && slot.end_period != null) {
                             return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                                    (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
                           }
-                          return true; // 如果没有指定节次，则整个时段都禁排
+                          return false; // 未指定节次范围时不禁排
                         }
                         
                         // 检查特定周次的特定星期禁排
                         if (slot.type === 'specific' && slot.specific_week_days) {
                           const isSpecificWeekDay = slot.specific_week_days?.some(wd => wd.week === week && wd.day === day.value) || false;
                           if (isSpecificWeekDay) {
-                            if (slot.start_period && slot.end_period) {
+                            if (slot.start_period != null && slot.end_period != null) {
                               return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                                      (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
                             }
-                            return true; // 如果没有指定节次，则整个时段都禁排
+                            return false; // 未指定节次范围时不禁排
                           }
                         }
                         
                         // 检查特定周次的特定天禁排
                         if (slot.type === 'specific' && slot.week_number === week && slot.day_of_week === day.value) {
-                          // 如果指定了节次范围，检查节次是否匹配
-                          if (slot.start_period && slot.end_period) {
+                          if (slot.start_period != null && slot.end_period != null) {
                             return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                                    (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
                           }
-                          return true; // 没有指定节次范围，整个时段都禁排
+                          return false; // 未指定节次范围时不禁排
                         }
                         
-                        // 检查全周禁排
-                        if (slot.type === 'specific' && slot.week_number === week) {
-                          // 如果指定了节次范围，检查节次是否匹配
-                          if (slot.start_period && slot.end_period) {
+                        // 检查全周禁排（仅当未使用 specific_week_days 时）
+                        if (slot.type === 'specific' && slot.week_number === week && (!slot.specific_week_days || slot.specific_week_days.length === 0)) {
+                          if (slot.start_period != null && slot.end_period != null) {
                             return (startPeriod >= slot.start_period && startPeriod <= slot.end_period) || 
                                    (endPeriod >= slot.start_period && endPeriod <= slot.end_period);
                           }
-                          return true; // 没有指定节次范围，整个时段都禁排
+                          return false; // 未指定节次范围时不禁排
                         }
                         
                         return false;
@@ -609,8 +634,16 @@ const TimeGrid: React.FC<TimeGridProps> = ({
                         return (item.periods.includes(startPeriod) || item.periods.includes(endPeriod));
                       });
                       
+                      // 检查教室占用（选择教室后）
+                      const isWeekBlockedByRoom = selectedRoom ? (scheduledClasses || []).some(schedule => {
+                        if (currentCourse && schedule.course_id === currentCourse.course_id) return false;
+                        if (schedule.room_id !== selectedRoom) return false;
+                        if (schedule.week_number !== week || schedule.day_of_week !== day.value) return false;
+                        return schedule.period === startPeriod || schedule.period === endPeriod;
+                      }) : false;
+                      
                       // 如果该周次没有被禁排，则计数
-                      if (!isWeekBlockedByConfig && !isWeekBlockedByLargeClass && !isWeekBlockedByImported) {
+                      if (!isWeekBlockedByConfig && !isWeekBlockedByLargeClass && !isWeekBlockedByImported && !isWeekBlockedByRoom) {
                         availableWeeks++;
                       }
                     }
@@ -621,7 +654,7 @@ const TimeGrid: React.FC<TimeGridProps> = ({
                   const availableWeeks = calculateAvailableWeeks();
                   
                   // 最终禁排状态
-                  const isBlocked = isBlockedByConfig || isBlockedByLargeClass || isBlockedByTeacherConflict || isBlockedByImported;
+                  const isBlocked = isBlockedByConfig || isBlockedByLargeClass || isBlockedByTeacherConflict || isBlockedByImported || isBlockedByRoomConflict;
                   const blockReason = isBlocked ? getBlockReason() : '';
                   
                   return (

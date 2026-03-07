@@ -2,6 +2,7 @@ import React from 'react';
 import { BookOpen, Download, Filter, X } from 'lucide-react';
 import type { LargeClassEntry } from '../../types';
 import * as XLSX from 'xlsx';
+import { useAuth } from '../../hooks/useAuth';
 
 interface LargeClassListProps {
   largeClassEntries: LargeClassEntry[];
@@ -9,6 +10,8 @@ interface LargeClassListProps {
 }
 
 export default function LargeClassList({ largeClassEntries, loading = false }: LargeClassListProps) {
+  const { isAdmin } = useAuth();
+
   // 过滤无效记录
   const filteredEntries = largeClassEntries.filter(entry => {
     return entry.course_name && entry.class_name && entry.day_of_week && entry.period_start && entry.period_end;
@@ -168,14 +171,17 @@ export default function LargeClassList({ largeClassEntries, loading = false }: L
           <BookOpen className="inline-block w-5 h-5 text-purple-600 mr-2" />
           通适大课列表
         </h2>
-        <button
-          onClick={handleExport}
-          disabled={groupedList.length === 0}
-          className="btn-secondary flex items-center gap-2"
-        >
-          <Download className="w-4 h-4" />
-          导出Excel
-        </button>
+        {/* 只有管理员显示导出按钮 */}
+        {isAdmin && (
+          <button
+            onClick={handleExport}
+            disabled={groupedList.length === 0}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <Download className="w-4 h-4" />
+            导出Excel
+          </button>
+        )}
       </div>
       
       <div className="card overflow-x-auto">
