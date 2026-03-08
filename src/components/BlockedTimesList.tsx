@@ -11,7 +11,7 @@ interface MergedBlockedTime {
   items: any[];
 }
 
-const BlockedTimesList: React.FC = () => {
+const BlockedTimesList: React.FC<{ isAdmin?: boolean }> = ({ isAdmin = false }) => {
   const { 
     allData, 
     isLoading, 
@@ -220,12 +220,14 @@ const BlockedTimesList: React.FC = () => {
             <RefreshCw className={`w-4 h-4 mr-1 ${isLoading ? 'animate-spin' : ''}`} />
             刷新
           </button>
-          <button
-            onClick={handleClearAll}
-            className="inline-flex items-center px-3 py-1.5 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-red-50 hover:bg-red-100"
-          >
-            清空所有
-          </button>
+          {isAdmin && (
+            <button
+              onClick={handleClearAll}
+              className="inline-flex items-center px-3 py-1.5 border border-red-300 text-sm font-medium rounded-md text-red-700 bg-red-50 hover:bg-red-100"
+            >
+              清空所有
+            </button>
+          )}
         </div>
       </div>
 
@@ -322,17 +324,21 @@ const BlockedTimesList: React.FC = () => {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-900">
-                    <button
-                      onClick={() => {
-                        if (confirm('确定删除这些禁排时间吗？')) {
-                          item.items.forEach((item: any) => handleDelete(item.id));
-                        }
-                      }}
-                      className="text-red-600 hover:text-red-900 inline-flex items-center"
-                    >
-                      <Trash2 className="w-4 h-4 mr-1" />
-                      删除
-                    </button>
+                    {isAdmin ? (
+                      <button
+                        onClick={() => {
+                          if (confirm('确定删除这些禁排时间吗？')) {
+                            item.items.forEach((item: any) => handleDelete(item.id));
+                          }
+                        }}
+                        className="text-red-600 hover:text-red-900 inline-flex items-center"
+                      >
+                        <Trash2 className="w-4 h-4 mr-1" />
+                        删除
+                      </button>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
                   </td>
                 </tr>
               ))

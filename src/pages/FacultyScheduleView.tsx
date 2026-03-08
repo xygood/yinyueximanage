@@ -1,6 +1,6 @@
 /**
- * 教研室排课视图页面
- * 按教研室查看排课情况，支持按乐器筛选
+ * 我的课表页面
+ * 按教研室查看排课情况，支持按乐器/教师筛选；教师登录仅看本人排课
  */
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
@@ -9,6 +9,7 @@ import FacultyFilter from '../components/FacultyFilter';
 import { Calendar, Clock, MapPin, Users, ChevronLeft, ChevronRight, Filter, X, Loader2 } from 'lucide-react';
 import { supabase } from '../services/supabase';
 import { scheduleViewService, ScheduleClassView, ViewFilters, weekConfigService, teacherService, roomService } from '../services';
+import { useAuth } from '../hooks/useAuth';
 
 interface Room {
   id: string;
@@ -36,6 +37,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
   schedules: initialSchedules,
   onClassClick
 }) => {
+  const { user, teacher, isAdmin } = useAuth();
   const [currentWeek, setCurrentWeek] = useState(1);
   const [selectedFaculty, setSelectedFaculty] = useState<string | null>(null);
   const [selectedInstrument, setSelectedInstrument] = useState<string | null>(null);
@@ -99,7 +101,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
     loadAuxiliaryData();
   }, []);
 
-  // 加载排课数据
+  // 加载排课数据（教师登录时仅加载本人的排课）
   const loadSchedules = useCallback(async () => {
     try {
       setLoading(true);
@@ -114,6 +116,12 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
         totalWeeks: totalWeeks
       };
       
+      // 非管理员教师：只加载当前教师的排课（同时传 id 与工号以兼容不同数据源）
+      if (!isAdmin && (teacher?.id || teacher?.teacher_id || user?.teacher_id)) {
+        filters.teacherId = teacher?.id || user?.teacher_id;
+        if (teacher?.teacher_id) filters.teacherWorkId = teacher.teacher_id;
+      }
+      
       const data = await scheduleViewService.getViewSchedules(filters);
       setSchedules(data);
     } catch (err) {
@@ -122,7 +130,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [selectedFaculty, selectedWeekRange.startWeek, selectedWeekRange.endWeek, totalWeeks]);
+  }, [isAdmin, teacher?.id, teacher?.teacher_id, user?.teacher_id, selectedFaculty, selectedWeekRange.startWeek, selectedWeekRange.endWeek, totalWeeks]);
 
   // 初始加载和筛选变化时重新加载
   useEffect(() => {
@@ -130,6 +138,13 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
       loadSchedules();
     }
   }, [loadSchedules, initialSchedules]);
+
+  // 教师登录时默认选中其教研室
+  useEffect(() => {
+    if (!isAdmin && teacher?.faculty_id && selectedFaculty === null) {
+      setSelectedFaculty(teacher.faculty_id);
+    }
+  }, [isAdmin, teacher?.faculty_id]);
 
   // 教研室视图以稳定浏览为主，这里不启用实时订阅，避免频繁闪烁加载状态
 
@@ -359,22 +374,17 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
     }
   }, [selectedFaculty, getFacultyStats, schedules]);
 
-  // 按小组分组的显示（优化单元格显示）
+  // 按小组分开展示：用 groupId 区分不同小组，同一教师、同一课程、同一节次下的多组不合并
   const getGroupedSchedulesAt = (day: number, period: number) => {
     const schedulesAtSlot = getSchedulesAt(day, period);
-    
-    // 按课程+教师+琴房分组
     const groups = new Map<string, ScheduleClassView[]>();
-    
     for (const schedule of schedulesAtSlot) {
-      const roomName = getRoomName(schedule);
-      const key = `${schedule.courseName}_${schedule.teacherName}_${roomName}`;
+      const key = (schedule as ScheduleClassView & { groupId?: string }).groupId || schedule.id;
       if (!groups.has(key)) {
         groups.set(key, []);
       }
       groups.get(key)!.push(schedule);
     }
-    
     return Array.from(groups.values());
   };
 
@@ -420,7 +430,10 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
       <div className="flex items-center justify-between mb-6">
         <h1 className="page-title flex items-center gap-2">
           <Calendar className="w-6 h-6 text-purple-600" />
-          教研室排课视图
+          我的课表
+          {!isAdmin && (teacher?.name || user?.full_name) && (
+            <span className="text-base font-normal text-gray-500">（{teacher?.name || user?.full_name}）</span>
+          )}
         </h1>
 
         {/* 视图切换 */}
@@ -459,6 +472,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
             onInstrumentSelect={setSelectedInstrument}
             onTeacherSelect={setSelectedTeacherId}
             teachers={teachers as any}
+            showTeacherList={isAdmin}
           />
 
           {/* 周数筛选器 */}
@@ -625,14 +639,14 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
             {viewMode === 'week' ? (
               // 周视图：纵向节次，横向天数
               <div className="overflow-x-auto pb-32">
-                <table className="w-full">
+                <table className="w-full border-collapse">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="p-3 text-left text-sm font-medium text-gray-600 w-24">
+                      <th className="p-3 text-left text-sm font-medium text-gray-600 w-24 border-r border-gray-200">
                         节次
                       </th>
                       {dayLabels.map((label, index) => (
-                        <th key={index} className="p-3 text-center text-sm font-medium text-gray-600">
+                        <th key={index} className="p-3 text-center text-sm font-medium text-gray-600 border-r border-gray-100 last:border-r-0">
                           {label}
                         </th>
                       ))}
@@ -646,7 +660,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                           period.period % 2 === 1 ? 'bg-gray-50' : 'bg-white'
                         }`}
                       >
-                        <td className="p-3">
+                        <td className="p-3 border-r border-gray-200">
                           <div className="flex items-center gap-1 text-sm text-gray-600">
                             <Clock className="w-4 h-4" />
                             第{period.period}节
@@ -658,7 +672,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
                         {Array.from({ length: 7 }).map((_, i) => i + 1).map((day) => {
                           const scheduleGroups = getGroupedSchedulesAt(day, period.period);
                           return (
-                            <td key={day} className="p-2 align-top">
+                            <td key={day} className="p-2 align-top border-r border-gray-100 last:border-r-0">
                               {renderScheduleGroups(scheduleGroups)}
                             </td>
                           );

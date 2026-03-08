@@ -77,6 +77,39 @@ const WEEKDAYS = [
   { value: 7, label: '周日' },
 ];
 
+/** 同一课程、同一批学生（学号集合相同，顺序无关）始终得到同一个 group_id，避免删了再排产生多个 group_id */
+async function getDeterministicGroupId(courseId: string, studentIds: string[]): Promise<string> {
+  const sorted = studentIds.slice().sort();
+  const key = `${courseId}|${sorted.join(',')}`;
+  const encoder = new TextEncoder();
+  const data = encoder.encode(key);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return 'g_' + hashHex.slice(0, 32);
+}
+
+// 可混排的乐器组：组内不同专业视为同一类，允许混合编组（如葫芦丝与竹笛可混排）
+const MIXABLE_INSTRUMENT_GROUPS: string[][] = [['葫芦丝', '竹笛']];
+const canMixMajors = (a: string | undefined, b: string | undefined): boolean => {
+  if (!a || !b) return true;
+  if (a === b) return true;
+  for (const group of MIXABLE_INSTRUMENT_GROUPS) {
+    if (group.includes(a) && group.includes(b)) return true;
+  }
+  return false;
+};
+const getMajorGroupKey = (major: string | undefined): string => {
+  if (!major) return major || '';
+  for (const group of MIXABLE_INSTRUMENT_GROUPS) {
+    if (group.includes(major)) return group[0];
+  }
+  return major;
+};
+
+// 大组乐器：普通班全部为副项时允许最多 8 人，其它情况最多 4 人（与古筝、葫芦丝、竹笛规则一致，仅此一份，三处校验共用）
+const LARGE_GROUP_INSTRUMENTS = ['古筝', '葫芦丝', '竹笛', '双排键'];
+
 // 排课显示类型（包含课程、学生和琴房信息）
 interface ScheduledClassDisplay {
   id: string;
@@ -639,114 +672,55 @@ export default function ArrangeClass() {
     try {
       const currentClass = groupStudents.length > 0 ? (groupStudents[0].major_class || groupStudents[0].class_name || '') : '';
       const allClasses = groupStudents.length > 0 ? Array.from(new Set(groupStudents.map((s: any) => s.major_class || s.class_name || '').filter((c: string) => c))) : [];
+
+      // 预计算占用/禁排集合，避免在 7x10 循环内重复遍历大数组，降低 CPU 占用
+      const teacherIdSet = getCurrentTeacherIdSet();
+      const teacherSlotSet = new Set<string>();
+      const studentSlotSet = new Set<string>();
+      const majorClassSlotSet = new Set<string>();
+      const blockedSlotSet = new Set<string>();
+
+      scheduledClasses.forEach((sc: any) => {
+        const key = `${sc.day_of_week}_${sc.period}`;
+        const weekInRange = !sc.start_week || !sc.end_week || (selectedWeek >= (sc.start_week || 0) && selectedWeek <= (sc.end_week || 99));
+        if (!weekInRange) return;
+        if (teacherIdSet.size > 0 && isCurrentTeacherSchedule(sc, teacherIdSet)) teacherSlotSet.add(key);
+        if (groupStudents.length > 0 && groupStudents.some(s => s.id === sc.student_id)) studentSlotSet.add(key);
+        if (groupStudents.length > 0 && isMajorClassSchedule(sc) && (sc.class_id || (sc as any).class_name)) {
+          const scClassName = sc.class_id || (sc as any).class_name;
+          const scClassNumber = scClassName.replace(/[^0-9]/g, '');
+          const match = allClasses.some((cn: string) => scClassNumber === cn.replace(/[^0-9]/g, '') || scClassName.includes(cn) || cn.includes(scClassName));
+          if (match) majorClassSlotSet.add(key);
+        }
+      });
+      unifiedBlockedTimes.forEach((slot: any) => {
+        if (!isBlockedMatchClass(slot, allClasses.length > 0 ? allClasses : currentClass)) return;
+        const weeks = Array.isArray(slot.weeks) ? slot.weeks : [];
+        if (weeks.length > 0 && !weeks.includes(selectedWeek)) return;
+        const d = slot.day_of_week !== undefined ? slot.day_of_week : slot.day;
+        const periods = slot.periods || [];
+        periods.forEach((p: number) => blockedSlotSet.add(`${d}_${p}`));
+      });
+
       const grid = [];
       for (let day = 0; day < 7; day++) {
         const dayRow = [];
         for (let period = 0; period < 10; period++) {
-          let isBlocked = false;
+          const key = `${day + 1}_${period + 1}`;
+          let isBlocked = blockedSlotSet.has(key) || isPeriodBlocked(day + 1, period + 1) || teacherSlotSet.has(key) || studentSlotSet.has(key) || majorClassSlotSet.has(key);
 
-          // 使用统一格式禁排（导入禁排 + 通适大课）
-          isBlocked = unifiedBlockedTimes.some((slot: any) => {
-            if (!isBlockedMatchClass(slot, allClasses.length > 0 ? allClasses : currentClass)) return false;
-            const weeks = Array.isArray(slot.weeks) ? slot.weeks : [];
-            if (weeks.length > 0 && !weeks.includes(selectedWeek)) return false;
-            const d = slot.day_of_week !== undefined ? slot.day_of_week : slot.day;
-            if (d !== day + 1) return false;
-            return (slot.periods || []).includes(period + 1);
-          });
-
-          // 检查硬编码的禁排时段（例如：所有周一下午5-8节禁排）
-          if (!isBlocked) {
-            isBlocked = isPeriodBlocked(day + 1, period + 1);
-          }
-          
-          // 检查教师已经排定的时间（包括专业大课和小组课）
-          if (!isBlocked) {
-            const teacherIdSet = getCurrentTeacherIdSet();
-            if (teacherIdSet.size > 0) {
-              const teacherSchedule = scheduledClasses.find(sc => {
-                const isTeacherMatch = isCurrentTeacherSchedule(sc, teacherIdSet);
-                if (!isTeacherMatch) return false;
-                if (sc.day_of_week !== day + 1 || sc.period !== period + 1) return false;
-                return true;
-              });
-
-              if (teacherSchedule) {
-                isBlocked = true;
-              }
-            }
-          }
-          
-          // 检查学生排课冲突（当有选中学生时）
-          if (!isBlocked && groupStudents.length > 0) {
-            const studentIds = groupStudents.map(s => s.id);
-            const studentConflict = scheduledClasses.find(sc => {
-              if (!studentIds.includes(sc.student_id)) return false;
-              if (sc.day_of_week !== day + 1 || sc.period !== period + 1) return false;
-              return true;
+          if (!isBlocked && groupStudents.length > 0 && allClasses.length > 0 && unifiedBlockedTimes.length > 0) {
+            const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => {
+              const blockedClassName = b.class_name;
+              return blockedClassName && allClasses.some((className: string) => blockedClassName.includes(className));
             });
-            
-            if (studentConflict) {
-              isBlocked = true;
-            }
+            isBlocked = allClassesBlockedTimes.some((blockedTime: any) => {
+              const d = blockedTime.day_of_week !== undefined ? blockedTime.day_of_week : blockedTime.day;
+              if (d !== day + 1) return false;
+              return (blockedTime.periods || []).includes(period + 1);
+            });
           }
-          
-          // 检查班级的专业大课禁排时间数据（当有选中学生时）
-          if (!isBlocked && groupStudents.length > 0) {
-            const allClasses = Array.from(new Set(groupStudents.map(s => s.major_class || s.class_name || '').filter(c => c)));
-            
-            if (allClasses.length > 0 && unifiedBlockedTimes.length > 0) {
-              const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => {
-                const blockedClassName = b.class_name;
-                return blockedClassName && allClasses.some((className: string) =>
-                  blockedClassName.includes(className)
-                );
-              });
-              
-              // 检查是否有任何周次的禁排（统一 day_of_week ?? day）
-              const isBlockedByImported = allClassesBlockedTimes.some((blockedTime: any) => {
-                const d = blockedTime.day_of_week !== undefined ? blockedTime.day_of_week : blockedTime.day;
-                if (d !== day + 1) return false;
-                if (!blockedTime.periods || !blockedTime.periods.includes(period + 1)) return false;
-                return true;
-              });
-              
-              if (isBlockedByImported) {
-                isBlocked = true;
-              }
-            }
-            
-            // 直接从排课记录中检查班级的专业大课禁排（不依赖localStorage）
-            if (!isBlocked) {
-              const majorClassSchedule = scheduledClasses.find(sc => {
-                // 检查是否为专业大课（通过course_id关联课程数据判断）
-                if (!isMajorClassSchedule(sc)) return false;
-                
-                // 检查班级是否匹配
-                const scClassName = sc.class_id || (sc as any).class_name;
-                if (!scClassName) return false;
-                
-                // 提取班级编号进行匹配（学生班级格式：音乐学2301，排课班级格式：2301）
-                const scClassNumber = scClassName.replace(/[^0-9]/g, ''); // 提取数字部分
-                const classMatches = allClasses.some((className: string) => {
-                  const classNumber = className.replace(/[^0-9]/g, ''); // 提取数字部分
-                  return scClassNumber === classNumber || 
-                         scClassName.includes(className) || 
-                         className.includes(scClassName);
-                });
-                if (!classMatches) return false;
-                
-                // 检查时间是否匹配
-                if (sc.day_of_week !== day + 1 || sc.period !== period + 1) return false;
-                return true;
-              });
-              
-              if (majorClassSchedule) {
-                isBlocked = true;
-              }
-            }
-          }
-          
+
           dayRow.push({ status: isBlocked ? 'blocked' : 'available' });
         }
         grid.push(dayRow);
@@ -1530,64 +1504,44 @@ export default function ArrangeClass() {
       }
 
       // 获取或创建课程
-      // 课程编号 + 班级 必须同时匹配才能使用已有课程
+      // 课程编号 + 班级 必须同时匹配才能使用已有课程；班级支持“音乐学2301”与“2301”等格式互通
+      const extractClassNumber = (s: string | undefined | null) => {
+        if (!s) return '';
+        const m = String(s).match(/\d+/);
+        return m ? m[0] : String(s).trim();
+      };
+      const classKey = extractClassNumber(classId);
+      
       let course = null;
       
       if (selectedCourseId && classId) {
-        // 如果有选中的课程编号和班级，必须同时匹配课程编号和班级
-        course = allCourses.find(c => 
-          (c as any).course_id === selectedCourseId && c.major_class === classId
-        );
-      } else if (selectedCourseId) {
-        // 如果只有课程编号没有班级，只匹配课程编号
+        course = allCourses.find(c => {
+          const cid = (c as any).course_id;
+          const cClass = (c as any).major_class;
+          const idMatch = cid === selectedCourseId;
+          const classMatch = cClass === classId || extractClassNumber(cClass) === classKey || cClass === classKey;
+          return idMatch && (classMatch || !cClass);
+        });
+      }
+      if (!course && selectedCourseId) {
         course = allCourses.find(c => (c as any).course_id === selectedCourseId);
       }
       
-      // 如果课程编号+班级不存在，再按课程名称和班级查找
+      // 如果课程编号+班级不存在，再按课程名称和班级查找（不要求任课教师一致，排课只使用现有课程）
       if (!course) {
         course = allCourses.find(c => {
-          // 首先匹配课程名称
           if (c.course_name !== selectedCourseName) return false;
-          
-          // 然后匹配班级ID（如果班级ID存在）
-          if (classId) {
-            return c.major_class === classId;
-          }
-          
-          // 如果班级ID不存在，匹配其他关键信息
-          // 同时考虑可能的班级信息不完整情况
+          const cClass = (c as any).major_class;
+          if (classId) return cClass === classId || extractClassNumber(cClass) === classKey || cClass === classKey;
           return c.course_type === courseType &&
-                 c.teacher_id === effectiveTeacher.id &&
-                 c.teaching_type === '小组课' &&
-                 (!c.major_class || c.major_class === '');
+                 (c as any).teaching_type === '小组课' &&
+                 (!cClass || cClass === '');
         });
       }
 
+      // 排课不创建新课程：只根据现有课程列表输出排课结果，未找到则提示从列表选择
       if (!course) {
-        // 创建新课程（年级/班级类型的一致性在前面已校验，这里不再重复限制班号）
-        course = await courseService.create({
-          teacher_id: effectiveTeacher.id,
-          course_name: selectedCourseName,
-          course_id: selectedCourseId || undefined,
-          course_type: courseType,
-          teaching_type: '小组课',
-          faculty_id: courseType === '钢琴' ? 'PIANO' : courseType === '声乐' ? 'VOCAL' : 'INSTRUMENT',
-          major_class: classId,
-          academic_year: selectedAcademicYear,
-          semester: currentSemesterNumber,
-          semester_label: selectedSemesterLabel,
-          course_category: 'general',
-          duration: 30,
-          week_frequency: 1
-        });
-        
-        // 更新课程列表，确保后续操作能正确检测重复课程
-        const updatedCourses = await courseService.getAll();
-        setCourses(updatedCourses || []);
-      }
-
-      if (!course) {
-        showToast('error', '课程创建失败');
+        showToast('error', '未在小组课列表中找到匹配的课程，请先从小组课列表中选择课程（课程名称+班级需与现有课程一致）后再排课');
         return;
       }
       
@@ -1670,8 +1624,9 @@ export default function ArrangeClass() {
       }
       updateProgress(35, 100);
 
-      // 生成小组ID（用于关联同组学生的排课记录）
-      const groupId = `group_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      // 同一课程、同一批学生（无论顺序）始终使用同一 group_id，避免多次删建产生多个 group
+      const courseIdForGroup = (course as any).course_id || course.id;
+      const groupId = await getDeterministicGroupId(courseIdForGroup, groupStudents.map((s) => s.id));
 
       // 批量创建排课记录（优化：使用createMany减少数据库操作）
       const schedulesToCreate: Array<Omit<ScheduledClass, 'id' | 'created_at'>> = [];
@@ -2249,6 +2204,8 @@ export default function ArrangeClass() {
       setSelectedTimeSlots(uniqueTimeSlots);
 
     }
+      // 确保进度条显示 100% 后再结束，避免卡在 98%
+      updateProgress(totalTasks, totalTasks);
     } catch (error) {
       console.error('编辑排课失败:', error);
       showToast('error', '编辑排课失败，请重试');
@@ -2373,7 +2330,14 @@ export default function ArrangeClass() {
         updateProgress(completedTasks, totalTasks);
       }
       
-      // 强制刷新排课数据
+      // 删除接口已成功，立即显示 100% 并移除进度条，避免卡在 98% 等待后续刷新
+      updateProgress(totalTasks, totalTasks);
+      try {
+        const bar = document.querySelector('.fixed.top-0.left-0.w-full.h-8.bg-gray-100.z-50');
+        if (bar && bar.parentNode) bar.parentNode.removeChild(bar);
+      } catch (_) {}
+      
+      // 强制刷新排课数据（后台执行，不再阻塞进度条）
       const effectiveTeacher = targetTeacher || teacher;
       if (effectiveTeacher) {
         // 先获取最新的所有课程数据
@@ -2407,12 +2371,15 @@ export default function ArrangeClass() {
         updateProgress(completedTasks, totalTasks);
       }
       
-      // 刷新学生进度
-      if (result.courseName) {
-        // 不需要手动更新进度，useMemo 会自动计算
-        completedTasks++;
-        updateProgress(completedTasks, totalTasks);
-      }
+      // 刷新全量排课缓存，使学生进度（已排满/未排满）立即重算，恢复被删记录对应学生的未排课状态
+      const freshSchedules = await scheduleService.getAll();
+      setAllSchedulesCache(freshSchedules);
+      
+      completedTasks++;
+      updateProgress(completedTasks, totalTasks);
+      
+      // 确保进度条显示 100% 后再结束（避免因步骤舍入或时序卡在 99%）
+      updateProgress(totalTasks, totalTasks);
       
       showToast('success', `成功删除 ${schedulesToDelete.length} 条排课记录`);
       
@@ -2491,7 +2458,14 @@ export default function ArrangeClass() {
       completedTasks++;
       updateProgress(completedTasks, totalTasks);
       
-      // 强制刷新排课数据
+      // 删除接口已成功，立即显示 100% 并移除进度条，避免卡在 33% 等待后续刷新
+      updateProgress(totalTasks, totalTasks);
+      try {
+        const bar = document.querySelector('.fixed.top-0.left-0.w-full.h-8.bg-gray-100.z-50');
+        if (bar && bar.parentNode) bar.parentNode.removeChild(bar);
+      } catch (_) {}
+      
+      // 强制刷新排课数据（后台执行，不再阻塞进度条）
       const effectiveTeacher = targetTeacher || teacher;
       if (effectiveTeacher) {
         // 先获取最新的所有课程数据
@@ -2524,10 +2498,19 @@ export default function ArrangeClass() {
         updateProgress(completedTasks, totalTasks);
       }
       
+      // 刷新全量排课缓存，使学生进度（已排满/未排满）立即重算，恢复被删记录对应学生的未排课状态
+      const freshSchedules = await scheduleService.getAll();
+      setAllSchedulesCache(freshSchedules);
+      completedTasks++;
+      updateProgress(completedTasks, totalTasks);
+      
       // 清空选中状态
       setSelectedScheduleIds(new Set());
       completedTasks++;
       updateProgress(completedTasks, totalTasks);
+      
+      // 确保进度条显示 100% 后再结束（避免卡在 99%）
+      updateProgress(totalTasks, totalTasks);
       
       const deletedCount = allIdsToDelete.length;
       showToast('success', `成功删除 ${deletedCount} 条排课记录`);
@@ -2686,26 +2669,12 @@ export default function ArrangeClass() {
         progressContainer.appendChild(progressBar);
         document.body.appendChild(progressContainer);
         
-        // 更新进度条的函数
-        let currentPercentage = 0;
+        // 更新进度条（直接赋值，避免 requestAnimationFrame 循环导致 CPU 占用过高）
         const updateProgress = (current: number, total: number) => {
           if (isCancelled || !progressContainer) return;
-          const targetPercentage = Math.min(100, Math.round((current / total) * 100));
-          
-          // 平滑动画过渡
-          const animateProgress = () => {
-            if (currentPercentage < targetPercentage) {
-              currentPercentage += 1;
-              if (currentPercentage > targetPercentage) {
-                currentPercentage = targetPercentage;
-              }
-              progressBar.style.width = `${currentPercentage}%`;
-              progressText.textContent = `${currentPercentage}%`;
-              requestAnimationFrame(animateProgress);
-            }
-          };
-          
-          animateProgress();
+          const pct = Math.min(100, Math.round((current / total) * 100));
+          progressBar.style.width = `${pct}%`;
+          progressText.textContent = `${pct}%`;
         };
 
         // 计算总任务数
@@ -2876,13 +2845,26 @@ export default function ArrangeClass() {
               
               return true;
             })
-            .reduce((map, course) => map.set(course.id, course), new Map())
+            // 排除任课教师为空的“不完整”课程（本系统课程均为固定数据，排课不生成新课程）
+            .filter((c: any) => ((c.teacher_name || c.teacher_id || '').toString().trim()) !== '')
+            // 按 (课程编号, 班级) 去重，同一课程只保留一条，避免重复显示
+            .reduce((map: Map<string, any>, course: any) => {
+              const key = `${(course.course_id || course.id || '').toString().trim()}_${(course.major_class || (course as any).class_name || '').toString().trim()}`;
+              const existing = map.get(key);
+              if (!existing) {
+                map.set(key, course);
+                return map;
+              }
+              const existingHasTeacher = !!((existing.teacher_name || existing.teacher_id || '').toString().trim());
+              const currentHasTeacher = !!((course.teacher_name || course.teacher_id || '').toString().trim());
+              if (currentHasTeacher && !existingHasTeacher) map.set(key, course);
+              return map;
+            }, new Map())
             .values()
         );
         setGroupCourses(groupCoursesData || []);
         completedTasks++;
         updateProgress(completedTasks, totalTasks);
-
 
 
         setCourses(coursesData || []);
@@ -3130,6 +3112,43 @@ export default function ArrangeClass() {
             updateProgress(completedTasks, totalTasks);
           }
           
+        } else if (isAdmin) {
+          // 管理员未选教师：排课结果模块显示所有已排课程，仅过滤专业大课/理论课，并转成展示结构（与选教师时一致）
+          const adminFilteredSchedule = (scheduleData || []).filter((sc: any) => {
+            const course = coursesData.find((c: any) => c.id === sc.course_id || c.course_id === sc.course_id);
+            if (course) {
+              if ((course as any).teaching_type === '专业大课') return false;
+              if ((course as any).course_type === '理论课') return false;
+            }
+            if (sc.teaching_type === '专业大课' || sc.teaching_type === '大课') return false;
+            const courseName = sc.course_name || (course as any)?.course_name || '';
+            if (courseName.includes('理论') || courseName.includes('大课')) return false;
+            return true;
+          });
+          const displaySchedule: ScheduledClassDisplay[] = adminFilteredSchedule.map((sc: any) => {
+            const effectiveTeacher = targetTeacher || teacher;
+            return {
+              id: sc.id,
+              day_of_week: sc.day_of_week,
+              period: sc.period,
+              course_id: sc.course_id,
+              course_name: sc.courses?.course_name || sc.course_name || findCourseById(coursesData || [], sc.course_id)?.course_name || '课程',
+              course_type: sc.courses?.course_type || sc.course_type || findCourseById(coursesData || [], sc.course_id)?.course_type || '器乐',
+              teacher_id: sc.teacher_id,
+              teacher_name: sc.teacher_name || sc.courses?.teacher_name || sc.courses?.teacher?.name || effectiveTeacher?.name || '未知教师',
+              student_id: sc.student_id,
+              student_name: sc.students?.name || sc.student_name || allStudentsData.find((s: any) => s.id === sc.student_id)?.name || '学生',
+              room_name: sc.rooms?.room_name || sc.room_name || (sc as any).rooms?.room_name || (sc as any).room_name,
+              class_name: sc.class_name || sc.courses?.major_class || findCourseById(coursesData || [], sc.course_id)?.major_class || allStudentsData.find((s: any) => s.id === sc.student_id)?.major_class || '',
+              start_week: sc.start_week,
+              end_week: sc.end_week
+            };
+          });
+          setScheduledClasses(displaySchedule);
+          setMyStudents([]);
+          setFixedRooms([]);
+          completedTasks += 3;
+          updateProgress(completedTasks, totalTasks);
         } else {
           setMyStudents([]);
           setScheduledClasses([]);
@@ -3303,7 +3322,7 @@ export default function ArrangeClass() {
       // 移除事件监听器
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [teacher, targetTeacher]);
+  }, [teacher, targetTeacher, isAdmin]);
 
   // WebSocket实时同步监听
   useEffect(() => {
@@ -3440,17 +3459,13 @@ export default function ArrangeClass() {
 
       // 检查普通班全部副项人数限制
       if (mainCourseStudents.length === 0) {
-        // 定义允许更多人数的副项专业（古筝、葫芦丝、竹笛：最多8人）
-        const largeGroupInstruments = ['古筝', '葫芦丝', '竹笛'];
-        
-        // 检查是否为大组乐器
+        // 检查是否为大组乐器（使用统一常量 LARGE_GROUP_INSTRUMENTS）
         let isLargeGroupCourse = false;
         
-        // 检查小组中是否有大组乐器的学生
         for (const student of generalStudents) {
           if (student.secondary_instruments) {
             for (const instrument of student.secondary_instruments) {
-              if (largeGroupInstruments.includes(instrument)) {
+              if (LARGE_GROUP_INSTRUMENTS.includes(instrument)) {
                 isLargeGroupCourse = true;
                 break;
               }
@@ -5300,22 +5315,13 @@ export default function ArrangeClass() {
     // 模拟进度更新
     updateProgress(10);
 
-    // 检查人数限制
+    // 检查人数限制（使用统一常量 LARGE_GROUP_INSTRUMENTS）
     const checkGroupSizeLimit = () => {
-      // 定义允许更多人数的专业（古筝、葫芦丝、竹笛：最多8人）
-      const largeGroupInstruments = ['古筝', '葫芦丝', '竹笛'];
-      
-      // 检查是否为大组课程
       let isLargeGroupCourse = false;
       let courseTypeName = selectedCourseType;
-      
-      // 检查是否全部为副项
       let isAllSecondary = true;
-      
-      // 检查是否为普通班级
       let isGeneralClass = true;
       
-      // 检查小组中是否有主项学生
       for (const existingStudent of groupStudents) {
         if (studentSources.get(existingStudent.id) === 'primary') {
           isAllSecondary = false;
@@ -5325,7 +5331,6 @@ export default function ArrangeClass() {
         }
       }
       
-      // 检查当前要添加的学生是否为主项或非普通班级
       if (source === 'primary') {
         isAllSecondary = false;
       }
@@ -5333,17 +5338,12 @@ export default function ArrangeClass() {
         isGeneralClass = false;
       }
       
-      // 检查是否为大组课程
-      // 1. 首先检查当前选择的课程类型是否为大组乐器
-      if (largeGroupInstruments.includes(selectedCourseType)) {
+      if (LARGE_GROUP_INSTRUMENTS.includes(selectedCourseType)) {
         isLargeGroupCourse = true;
-      } 
-      // 2. 检查小组中是否有大组乐器的学生
-      else {
-        // 检查当前要添加的学生是否为大组乐器
+      } else {
         if (student.secondary_instruments) {
           for (const instrument of student.secondary_instruments) {
-            if (largeGroupInstruments.includes(instrument)) {
+            if (LARGE_GROUP_INSTRUMENTS.includes(instrument)) {
               isLargeGroupCourse = true;
               courseTypeName = instrument;
               break;
@@ -5351,12 +5351,11 @@ export default function ArrangeClass() {
           }
         }
         
-        // 检查已在小组中的学生是否为大组乐器
         if (!isLargeGroupCourse) {
           for (const existingStudent of groupStudents) {
             if (existingStudent.secondary_instruments) {
               for (const instrument of existingStudent.secondary_instruments) {
-                if (largeGroupInstruments.includes(instrument)) {
+                if (LARGE_GROUP_INSTRUMENTS.includes(instrument)) {
                   isLargeGroupCourse = true;
                   courseTypeName = instrument;
                   break;
@@ -5460,7 +5459,7 @@ export default function ArrangeClass() {
     
     updateProgress(50);
 
-    // 检查专业混合（不同专业不能混合编组）
+    // 检查专业混合（不同专业不能混合编组；葫芦丝与竹笛允许混排）
     const checkMajorMix = () => {
       if (groupStudents.length === 0) {
         return true;
@@ -5472,10 +5471,10 @@ export default function ArrangeClass() {
         return true;
       }
       
-      // 检查小组中是否有不同专业的学生
+      // 检查小组中是否有不同专业的学生（葫芦丝与竹笛视为可混排）
       for (const existingStudent of groupStudents) {
         const existingMajor = existingStudent.__courseType;
-        if (existingMajor && existingMajor !== newStudentMajor) {
+        if (existingMajor && !canMixMajors(existingMajor, newStudentMajor)) {
           showToast('error', '不同专业不能混合编组');
           return false;
         }
@@ -6005,6 +6004,9 @@ export default function ArrangeClass() {
   // 清空小组
   const clearGroup = async () => {
     setGroupStudents([]);
+    setSelectedCourseName('');
+    setSelectedCourseId('');
+    setSelectedCourseClassId('');
     // 清空学生来源信息
     setStudentSources(new Map());
     // 清空小组后，重新加载所有小组课数据
@@ -6317,12 +6319,11 @@ export default function ArrangeClass() {
         .join('|');
 
       // 使用 group_id（如果存在）来标识同一小组，确保同一小组跨班学生合并显示
-      // 若无 group_id，则退回到“课程编号 + 班级 + 教师 + 时间”分组（兼容旧数据）
+      // 若无 group_id（旧数据或未保存成功），按“课程编号 + 教师姓名 + 时间”合并，不按班级拆分，使混班能合并为一行
       const groupGroupId = ownSchedules[0]?.group_id;
-      const classKey = studentGroup.student?.className || '';
       const groupKey = groupGroupId
         ? `${groupGroupId}_${timeKey}`
-        : `${studentGroup.courseId}_${studentGroup.teacherId}_${classKey || 'NOCLASS'}_${timeKey}`;
+        : `${studentGroup.courseId}_${studentGroup.teacherName}_${timeKey}`;
       
       if (timeStudentGroups[groupKey]) {
         // 添加学生到现有组
@@ -6510,11 +6511,77 @@ export default function ArrangeClass() {
       };
     });
     
+    // 第二遍合并：按“课程编号 + 教师姓名 + 排课时间”再合并一次，确保混班（无 group_id 或 group_id 未生效时）能合并为一行
+    const secondMergeKey = (r: any) => `${r.courseId}_${r.teacherName}_${r.scheduleTime}`;
+    const bySecondKey: Record<string, any[]> = {};
+    results.forEach((r: any) => {
+      const key = secondMergeKey(r);
+      if (!bySecondKey[key]) bySecondKey[key] = [];
+      bySecondKey[key].push(r);
+    });
+    const afterSecondMerge: any[] = [];
+    Object.values(bySecondKey).forEach((group: any[]) => {
+      if (group.length <= 1) {
+        afterSecondMerge.push(...group);
+        return;
+      }
+      const first = group[0];
+      const mergedStudents: any[] = [];
+      const seenStudentIds = new Set<string | number>();
+      const mergedSchedules: any[] = [];
+      const seenScheduleIds = new Set<string | number>();
+      group.forEach((r: any) => {
+        (r.students || []).forEach((s: any) => {
+          const sid = s.student_id ?? s.id ?? s.name;
+          if (sid != null && !seenStudentIds.has(sid)) {
+            seenStudentIds.add(sid);
+            mergedStudents.push(s);
+          }
+        });
+        (r.originalSchedules || []).forEach((sch: any) => {
+          if (sch.id != null && !seenScheduleIds.has(sch.id)) {
+            seenScheduleIds.add(sch.id);
+            mergedSchedules.push(sch);
+          }
+        });
+      });
+      const studentNames = mergedStudents.map((s: any) => s.name).join('<br>');
+      const studentIds = mergedStudents.map((s: any) => s.student_id || '').join('<br>');
+      const studentClasses = mergedStudents.map((s: any) => s.className || '').join('<br>');
+      const studentClass = mergedStudents[0]?.className || '';
+      const scheduleTime = first.scheduleTime;
+      const uniqueTimeSlots = new Set<string>();
+      mergedSchedules.forEach((schedule: any) => {
+        const timeKey = `${schedule.day_of_week || schedule.day}_${schedule.period}_${schedule.start_week || schedule.week}`;
+        uniqueTimeSlots.add(timeKey);
+      });
+      const scheduledHours = uniqueTimeSlots.size;
+      const groupSize = mergedStudents.length;
+      let finalGroupSize = groupSize;
+      const isLargeClass = first.isLargeClass;
+      if (isLargeClass && studentClass) {
+        const classStudents = students.filter(s => s.major_class === studentClass || s.class_name === studentClass);
+        if (classStudents.length > 0) finalGroupSize = classStudents.length;
+      }
+      afterSecondMerge.push({
+        ...first,
+        id: `${first.courseId}_${first.teacherId ?? first.teacherName}_${mergedStudents.map((s: any) => s.name).join('_')}_${scheduleTime}`,
+        studentName: studentNames,
+        studentIds,
+        studentClasses,
+        studentClass,
+        groupSize: finalGroupSize,
+        scheduledHours,
+        students: mergedStudents,
+        originalSchedules: mergedSchedules
+      });
+    });
+    
     // 去重处理
     const uniqueResults = [];
     const seenIds = new Set();
 
-    for (const result of results) {
+    for (const result of afterSecondMerge) {
       if (!seenIds.has(result.id)) {
         seenIds.add(result.id);
         uniqueResults.push(result);
@@ -7896,14 +7963,27 @@ export default function ArrangeClass() {
 
           return true;
         })
-        .reduce((map, course) => map.set(course.id, course), new Map())
+        // 排除任课教师为空的“不完整”课程；按 (课程编号, 班级) 去重，只保留一条
+        .filter((c: any) => ((c.teacher_name || c.teacher_id || '').toString().trim()) !== '')
+        .reduce((map: Map<string, any>, course: any) => {
+          const key = `${(course.course_id || course.id || '').toString().trim()}_${(course.major_class || (course as any).class_name || '').toString().trim()}`;
+          const existing = map.get(key);
+          if (!existing) {
+            map.set(key, course);
+            return map;
+          }
+          const existingHasTeacher = !!((existing.teacher_name || existing.teacher_id || '').toString().trim());
+          const currentHasTeacher = !!((course.teacher_name || course.teacher_id || '').toString().trim());
+          if (currentHasTeacher && !existingHasTeacher) map.set(key, course);
+          return map;
+        }, new Map())
         .values();
     
     const result = Array.from(filteredGroupCourses);
 
     // 如果过滤后没有课程，尝试更宽松的过滤
     if (result.length === 0) {
-      const relaxedFilteredCourses = allCourses
+      const relaxedMap = allCourses
           .filter(course => {
           // 只保留授课类型为小组课的课程
           const isGroupCourse = (course as any).teaching_type === '小组课';
@@ -7960,8 +8040,23 @@ export default function ArrangeClass() {
           
           // 不按班级过滤，只按专业类型过滤
           return true;
-        });
+        })
+        // 排除任课教师为空的“不完整”课程；按 (课程编号, 班级) 去重
+        .filter((c: any) => ((c.teacher_name || c.teacher_id || '').toString().trim()) !== '')
+        .reduce((map: Map<string, any>, course: any) => {
+          const key = `${(course.course_id || course.id || '').toString().trim()}_${(course.major_class || (course as any).class_name || '').toString().trim()}`;
+          const existing = map.get(key);
+          if (!existing) {
+            map.set(key, course);
+            return map;
+          }
+          const existingHasTeacher = !!((existing.teacher_name || existing.teacher_id || '').toString().trim());
+          const currentHasTeacher = !!((course.teacher_name || course.teacher_id || '').toString().trim());
+          if (currentHasTeacher && !existingHasTeacher) map.set(key, course);
+          return map;
+        }, new Map());
       
+      const relaxedFilteredCourses = Array.from(relaxedMap.values());
       setGroupCourses(relaxedFilteredCourses);
 
       // 如果当前还没有选择课程，则自动选中过滤后的第一门课
@@ -8069,7 +8164,21 @@ export default function ArrangeClass() {
             
             return true;
           })
-          .reduce((map, course) => map.set(course.id, course), new Map())
+          // 排除任课教师为空的“不完整”课程（本系统课程均为固定数据，排课不生成新课程）
+          .filter((c: any) => ((c.teacher_name || c.teacher_id || '').toString().trim()) !== '')
+          // 按 (课程编号, 班级) 去重，同一课程只保留一条，避免重复显示
+          .reduce((map: Map<string, any>, course: any) => {
+            const key = `${(course.course_id || course.id || '').toString().trim()}_${(course.major_class || (course as any).class_name || '').toString().trim()}`;
+            const existing = map.get(key);
+            if (!existing) {
+              map.set(key, course);
+              return map;
+            }
+            const existingHasTeacher = !!((existing.teacher_name || existing.teacher_id || '').toString().trim());
+            const currentHasTeacher = !!((course.teacher_name || course.teacher_id || '').toString().trim());
+            if (currentHasTeacher && !existingHasTeacher) map.set(key, course);
+            return map;
+          }, new Map())
           .values()
       );
       setGroupCourses(groupCoursesData || []);
@@ -8255,13 +8364,12 @@ export default function ArrangeClass() {
       };
     }
 
-    // 检查专业混合（不同专业不能混合编组）
-    const majors = new Set();
+    // 检查专业混合（不同专业不能混合编组；葫芦丝与竹笛允许混排）
+    const majors = new Set<string>();
     groupStudents.forEach(student => {
-      // 获取学生的专业类型（使用__courseType属性，这是学生添加到小组时的专业类型）
       const major = student.__courseType;
       if (major) {
-        majors.add(major);
+        majors.add(getMajorGroupKey(major));
       }
     });
     
@@ -8305,15 +8413,13 @@ export default function ArrangeClass() {
       }
       
       if (mainCourseStudents.length === 0) {
-        // 检查是否为竹笛、古筝、葫芦丝这三个专业
-        const largeGroupInstruments = ['古筝', '葫芦丝', '竹笛'];
+        // 检查是否为大组乐器（使用统一常量 LARGE_GROUP_INSTRUMENTS）
         let isLargeGroupCourse = false;
         
-        // 检查小组中是否有大组乐器的学生
         for (const student of generalStudents) {
           if (student.secondary_instruments) {
             for (const instrument of student.secondary_instruments) {
-              if (largeGroupInstruments.includes(instrument)) {
+              if (LARGE_GROUP_INSTRUMENTS.includes(instrument)) {
                 isLargeGroupCourse = true;
                 break;
               }
@@ -8404,20 +8510,20 @@ export default function ArrangeClass() {
   const hasMySchedule = scheduledClasses.length > 0;
 
   // 智能数据检查逻辑
-  // 对于教师用户，检查教师名下的数据；对于管理员，检查全系统数据
+  // 管理员始终进入排课界面（可先选择教师），不显示引导页
   let shouldShowGuide = false;
   
-  if (teacher) {
+  if (isAdmin) {
+    shouldShowGuide = false; // 管理员始终显示排课界面，可先选择教师进行排课
+  } else if (teacher) {
     // 教师视图：检查教师名下的基础数据
     // 只有当既没有自己名下的学生、也没有任何排课时才显示引导
     if (!hasMyStudents && !hasMySchedule) {
       shouldShowGuide = true;
     }
   } else {
-    // 管理员视图：需要全系统基础数据
-    // 只在“既没有学生、也没有班级”的情况下才显示引导
-    // 只要有学生或班级其中之一，就允许进入排课界面并选择教师
-    if (!hasStudents && !hasClasses) {
+    // 非管理员且非教师：需要全系统基础数据
+    if (!hasStudents && !hasClasses && !hasCourses) {
       shouldShowGuide = true;
     }
   }

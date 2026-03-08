@@ -22,9 +22,10 @@ interface FacultyFilterProps {
   onInstrumentSelect?: (instrument: string | null) => void;
   selectedFaculty?: string | null;
   selectedInstrument?: string | null;
-   selectedTeacherId?: string | null;
-   onTeacherSelect?: (teacherId: string | null) => void;
+  selectedTeacherId?: string | null;
+  onTeacherSelect?: (teacherId: string | null) => void;
   showInstruments?: boolean;
+  showTeacherList?: boolean;
   className?: string;
   teachers?: Teacher[];
 }
@@ -37,6 +38,7 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
   selectedTeacherId,
   onTeacherSelect,
   showInstruments = true,
+  showTeacherList = true,
   className = '',
   teachers: externalTeachers
 }) => {
@@ -256,7 +258,7 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
           )}
 
           {/* 教师列表 */}
-          {selectedFaculty && facultyTeachers.length > 0 && (
+          {showTeacherList && selectedFaculty && facultyTeachers.length > 0 && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 教师列表（按工号排序）
@@ -292,7 +294,7 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
           )}
 
           {/* 教师专业细分 */}
-          {selectedTeacher && selectedTeacherInstruments.length > 1 && (
+          {showTeacherList && selectedTeacher && selectedTeacherInstruments.length > 1 && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                 <Music className="w-4 h-4" />

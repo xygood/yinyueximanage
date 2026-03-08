@@ -88,6 +88,8 @@ export interface ScheduleClassView {
   credits: number;
   studentIds: string[];
   schedules: TimeSlot[]; // 所有时间段
+  /** 小组唯一标识，用于视图中按小组分开展示、不合并 */
+  groupId?: string;
 }
 
 // 时间段
@@ -101,7 +103,8 @@ export interface TimeSlot {
 export interface ViewFilters {
   facultyCode?: string; // PIANO/VOCAL/INSTRUMENT
   instrument?: string; // 具体乐器
-  teacherId?: string;
+  teacherId?: string;   // 教师 id 或工号，匹配 scheduled_classes.teacher_id
+  teacherWorkId?: string; // 教师工号，与 teacherId 二选一或同时用于匹配
   weekRange?: {
     startWeek: number;
     endWeek: number;
@@ -298,6 +301,7 @@ function convertToViewFormat(result: ScheduleResult): ScheduleClassView[] {
     for (const student of students) {
       const view: ScheduleClassView = {
         id: `${result.id}_${timeInfo.day}_${timeInfo.period}_${student.student_id || student.name}`,
+        groupId: result.id,
         courseName: result.courseName,
         studentName: student.name,
         instrument: result.courseType,
@@ -405,10 +409,12 @@ function buildScheduleResults(
     // 获取教师名称（优先从课程数据获取，专业大课的教师信息在课程中）
     const teacherName = schedule.teacher_name || course?.teacher_name || teacher?.name || '未知教师';
     
-    // 分组键：课程+教师+时间（专业大课可能没有teacher_id，使用teacherName）
+    // 分组键：有 group_id 时按小组拆分（同一教师、同一课程、同一节次下的不同小组分开展示）；无则沿用原逻辑
     const timeKey = `${schedule.day_of_week}_${schedule.period}`;
     const teacherKey = schedule.teacher_id || teacherName;
-    const groupKey = `${fullCourseName}_${courseTypeName}_${teacherKey}_${timeKey}`;
+    const groupKey = (schedule as any).group_id
+      ? `${(schedule as any).group_id}`
+      : `${fullCourseName}_${courseTypeName}_${teacherKey}_${timeKey}`;
     
     // 获取班级信息（专业大课的班级信息可能在课程或排课记录中）
     const classInfo = schedule.class_name || course?.major_class || '';
@@ -660,9 +666,12 @@ export const scheduleViewService = {
           }
         }
         
-        if (filters.teacherId) {
-          results = results.filter(r => 
-            r.originalSchedules.some((s: any) => s.teacher_id === filters.teacherId)
+        if (filters.teacherId || filters.teacherWorkId) {
+          const ids = [filters.teacherId, filters.teacherWorkId].filter(Boolean);
+          results = results.filter(r =>
+            r.originalSchedules.some((s: any) =>
+              ids.includes(s.teacher_id)
+            )
           );
         }
       }

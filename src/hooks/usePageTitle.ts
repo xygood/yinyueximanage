@@ -10,7 +10,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/rooms': '教室管理 - 音乐系管理系统',
   '/auto-schedule': '自动排课 - 音乐系管理系统',
   '/profile': '个人中心 - 音乐系管理系统',
-  '/faculty-schedule': '排课视图 - 音乐系管理系统',
+  '/faculty-schedule': '我的课表 - 音乐系管理系统',
   '/teachers': '教师管理 - 音乐系管理系统',
   '/student-import': '学生导入 - 音乐系管理系统',
   '/smart-student-assignment': '学生分配 - 音乐系管理系统',

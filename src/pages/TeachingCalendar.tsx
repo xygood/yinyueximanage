@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import {
   teachingCalendarService,
@@ -37,6 +37,7 @@ interface CourseOption {
 interface GroupOption {
   id: string; // group_id
   label: string; // 学生姓名列表
+  studentIds?: string[]; // 该小组学号列表，用于按学号查排课
 }
 
 const USE_DATABASE = import.meta.env.VITE_USE_DATABASE === 'true';
@@ -68,6 +69,8 @@ const TeachingCalendarPage: React.FC = () => {
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [classId, setClassId] = useState<string>('');
   const [groupId, setGroupId] = useState<string>('');
+  const groupIdRef = useRef<string>(groupId);
+  groupIdRef.current = groupId;
 
   const [calendar, setCalendar] = useState<TeachingCalendarDto | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -241,6 +244,9 @@ const TeachingCalendarPage: React.FC = () => {
       setGroupId('');
       setClassOptions([]);
       setGroupOptions([]);
+    } else if (options.length > 0 && !selectedCourseId) {
+      // 选择教师后，课程列表自动显示一门课程（默认选第一门）
+      setSelectedCourseId(options[0].id);
     }
   }, [
     allCourses,
@@ -337,6 +343,16 @@ const TeachingCalendarPage: React.FC = () => {
     }
 
     const classes = Array.from(classSet);
+    // 班级下拉按顺序排列：优先按班号数字排序（如 2401、2402、2403），再按字符串
+    classes.sort((a, b) => {
+      const numA = (a.match(/\d{4}/) || [])[0];
+      const numB = (b.match(/\d{4}/) || [])[0];
+      if (numA && numB) {
+        const n = parseInt(numA, 10) - parseInt(numB, 10);
+        if (n !== 0) return n;
+      }
+      return String(a).localeCompare(String(b), 'zh-CN');
+    });
     setClassOptions(classes);
 
     if (classes.length > 0 && !classId) {
@@ -431,45 +447,58 @@ const TeachingCalendarPage: React.FC = () => {
       teacher?.name ||
       (user as any)?.full_name;
 
-    const relatedSchedules = teacherSchedules.filter((s: any) => {
-      if (!s.group_id) return false; // 只有小组课才需要
+    // 多班混合小组：先按教师+课程+学期取所有带 group_id 的排课，不按班级过滤
+    const allGroupSchedules = teacherSchedules.filter((s: any) => {
+      if (!s.group_id) return false;
       if (!validCourseKeys.has(s.course_id)) return false;
-
-      // 只保留当前教师的记录
       if (teacherWorkId || teacherName) {
         const isTeacherMatch =
           (teacherWorkId && s.teacher_id === teacherWorkId) ||
           (teacherName && s.teacher_name === teacherName);
         if (!isTeacherMatch) return false;
       }
-
-      const student = studentMap.get(s.student_id);
-      if (!student || !student.major_class) return false;
-      return student.major_class === classId;
+      return true;
     });
 
-    if (relatedSchedules.length === 0) {
-      setGroupOptions([]);
-      setGroupId('');
-      return;
-    }
-
-    const groupsMap = new Map<string, Set<string>>();
-    relatedSchedules.forEach((s: any) => {
+    // 每个小组按 group_id 聚合成员（同一 group_id 可能有多条排课行）
+    const groupsMap = new Map<string, { names: Set<string>; studentIds: Set<string> }>();
+    allGroupSchedules.forEach((s: any) => {
       const gid: string = s.group_id;
       if (!gid) return;
       const stu = studentMap.get(s.student_id);
-      if (!stu || !stu.name) return;
       if (!groupsMap.has(gid)) {
-        groupsMap.set(gid, new Set<string>());
+        groupsMap.set(gid, { names: new Set(), studentIds: new Set() });
       }
-      groupsMap.get(gid)!.add(stu.name);
+      const entry = groupsMap.get(gid)!;
+      if (stu?.name) entry.names.add(stu.name);
+      if (s.student_id) entry.studentIds.add(s.student_id);
     });
 
-    const options: GroupOption[] = Array.from(groupsMap.entries()).map(([gid, names]) => ({
-      id: gid,
-      label: Array.from(names).join('、'),
-    }));
+    // 仅当选中班级属于某小组时，该小组才出现在下拉中（但小组内显示全部成员）
+    const groupIdsWithSelectedClass = new Set<string>();
+    allGroupSchedules.forEach((s: any) => {
+      const stu = studentMap.get(s.student_id);
+      if (stu && stu.major_class === classId) {
+        groupIdsWithSelectedClass.add(s.group_id);
+      }
+    });
+
+    // 按「学号集合」去重：同一批学生可能对应多个 group_id（历史数据或导入导致），只保留一项，姓名按拼音排序以便展示一致
+    const seenStudentSet = new Set<string>();
+    const options: GroupOption[] = [];
+    for (const [gid, { names, studentIds }] of Array.from(groupsMap.entries())) {
+      if (!groupIdsWithSelectedClass.has(gid)) continue;
+      const idsArray = Array.from(studentIds);
+      const canonicalKey = idsArray.slice().sort().join(',');
+      if (seenStudentSet.has(canonicalKey)) continue;
+      seenStudentSet.add(canonicalKey);
+      const namesSorted = Array.from(names).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      options.push({
+        id: gid,
+        label: namesSorted.join('、'),
+        studentIds: idsArray,
+      });
+    }
 
     setGroupOptions(options);
 
@@ -493,7 +522,14 @@ const TeachingCalendarPage: React.FC = () => {
     user,
   ]);
 
-  // 选中班级、小组后自动加载教学日历（无需手动点击加载按钮）
+  // 有小组选项时，未选小组则清空日历，避免显示其他班级/整班合并数据；选小组后再加载
+  useEffect(() => {
+    if (groupOptions.length > 0 && !groupId) {
+      setCalendar(null);
+    }
+  }, [groupOptions.length, groupId]);
+
+  // 选中班级、小组后自动加载教学日历（小组课必须在选择小组后才加载，默认第一个小组）
   useEffect(() => {
     if (!USE_DATABASE) return;
     if (!selectedSemesterLabel || !effectiveTeacherId || !selectedCourseId) return;
@@ -503,19 +539,44 @@ const TeachingCalendarPage: React.FC = () => {
     // 有小组选项时，必须选中小组
     if (groupOptions.length > 0 && !groupId) return;
 
+    // 小组课：若排课里已有 group_id（即当前是小组课），必须等 groupId 选中后再请求，避免先请求整班数据再被覆盖导致默认小组显示整年级排课
+    const courseKeys = (() => {
+      const c = courseOptions.find((co: any) => (co.course_id || co.id) === selectedCourseId);
+      const set = new Set<string>();
+      if (c) {
+        if (c.id) set.add(c.id);
+        if (c.course_id) set.add(c.course_id);
+      } else set.add(selectedCourseId);
+      return set;
+    })();
+    const hasGroupSchedules =
+      classId &&
+      teacherSchedules &&
+      teacherSchedules.some((s: any) => s.group_id && courseKeys.has(s.course_id));
+    if (hasGroupSchedules && !groupId) return;
+
+    const requestedGroupId = groupId;
     const load = async () => {
       setLoading(true);
       try {
         const course = courseOptions.find((c) => c.id === selectedCourseId);
         const courseKey = course?.course_id || course?.id || selectedCourseId;
+        const selectedGroup = groupOptions.find((g) => g.id === requestedGroupId);
         const data = await teachingCalendarService.getCalendar({
           semester_label: selectedSemesterLabel,
           teacher_id: effectiveTeacherId,
           course_id: courseKey,
           class_id: classId || undefined,
-          group_id: groupId || undefined,
+          group_id: requestedGroupId || undefined,
+          group_student_ids: selectedGroup?.studentIds?.length
+            ? selectedGroup.studentIds.join(',')
+            : undefined,
         });
-        setCalendar(data);
+        // 若请求时未带小组、返回时用户已选了小组，不覆盖为整班数据，避免默认小组显示整年级排课
+        setCalendar((prev) => {
+          if (requestedGroupId === '' && groupIdRef.current !== '') return prev;
+          return data;
+        });
         setActiveTab('info');
       } catch (error) {
         console.error('自动加载教学日历失败:', error);
@@ -533,10 +594,13 @@ const TeachingCalendarPage: React.FC = () => {
     groupId,
     classOptions.length,
     groupOptions.length,
+    groupOptions,
     courseOptions,
+    teacherSchedules,
   ]);
 
   // 根据当前班级和选中的小组，实时更新信息页中的“授课专业班级 / 小组学生”展示文本
+  // 小组课时：以后端返回的 class_display_name 为准（已含该组全部班级+学生名单），不随「班级」下拉覆盖
   useEffect(() => {
     if (!calendar) return;
     if (!classId) {
@@ -551,11 +615,10 @@ const TeachingCalendarPage: React.FC = () => {
       }
       return;
     }
+    // 小组课：不按上方班级下拉覆盖，后端已按排课结果返回完整班级列表
+    if (groupId) return;
 
-    const currentGroup = groupOptions.find((g) => g.id === groupId);
-    const expectedDisplay = currentGroup
-      ? `${formatClassDisplay(classId)}\n${currentGroup.label}`
-      : formatClassDisplay(classId);
+    const expectedDisplay = formatClassDisplay(classId);
 
     if (calendar.header.class_display_name !== expectedDisplay) {
       setCalendar({
@@ -611,6 +674,21 @@ const TeachingCalendarPage: React.FC = () => {
       const course = courseOptions.find((c) => c.id === selectedCourseId);
       const courseKey = course?.course_id || course?.id || selectedCourseId;
 
+      // 每行一个 schedule_id（每周一行），直接提交；若后端返回 schedule_ids 数组则展开为多条
+      const entriesToSave = (calendar.entries || []).flatMap((entry: any) => {
+        const scheduleIds = entry.schedule_ids as string[] | undefined;
+        if (scheduleIds && scheduleIds.length > 1) {
+          return scheduleIds.map((sid: string) => ({
+            schedule_id: sid,
+            week_number: entry.week_number,
+            is_empty_week: false,
+            teaching_content: entry.teaching_content ?? '',
+            remark: entry.remark ?? '',
+          }));
+        }
+        return [entry];
+      });
+
       const payload = await teachingCalendarService.saveCalendar({
         semester_label: selectedSemesterLabel,
         teacher_id: effectiveTeacherId,
@@ -623,9 +701,12 @@ const TeachingCalendarPage: React.FC = () => {
           extra_info: {
             ...calendar.header.extra_info,
             department_name: (calendar.header.extra_info?.department_name as string) || '音乐系',
+            required_hours: calendar.header.extra_info?.required_hours,
+            theory_hours: calendar.header.extra_info?.theory_hours,
+            practice_hours: calendar.header.extra_info?.practice_hours,
           },
         },
-        entries: calendar.entries,
+        entries: entriesToSave,
       });
       setCalendar(payload);
       alert('教学日历已保存');
@@ -709,6 +790,35 @@ const TeachingCalendarPage: React.FC = () => {
     }
   };
 
+  const handleClearEntries = async () => {
+    if (!USE_DATABASE || !calendar) return;
+    if (!selectedSemesterLabel || !effectiveTeacherId || !selectedCourseId) {
+      alert('请先选择学期、教师和课程');
+      return;
+    }
+    if (!window.confirm('确定要清除当前教学日历的导入数据吗？将同时清除本教师本课程年级模板，该教师下所有班级/小组都会清空，清除后可重新导入 Word。空周的禁排原因会保留。')) return;
+
+    setLoading(true);
+    try {
+      const course = courseOptions.find((c) => c.id === selectedCourseId);
+      const courseKey = course?.course_id || course?.id || selectedCourseId;
+      const data = await teachingCalendarService.clearEntries({
+        semester_label: selectedSemesterLabel,
+        teacher_id: effectiveTeacherId,
+        course_id: courseKey,
+        class_id: classId || undefined,
+        group_id: groupId || undefined,
+      });
+      setCalendar(data);
+      alert('已清除导入数据及年级模板，该教师本课程下所有班级/小组已清空，可重新从 Word 模板导入。');
+    } catch (error) {
+      console.error('清除教学日历数据失败:', error);
+      alert('清除失败，请检查控制台或稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleEntryChange = (index: number, field: keyof TeachingCalendarEntryDto, value: string) => {
     if (!calendar) return;
     const entries = [...calendar.entries];
@@ -768,6 +878,15 @@ const TeachingCalendarPage: React.FC = () => {
               disabled={importing}
             />
           </label>
+          <button
+            type="button"
+            onClick={handleClearEntries}
+            className="inline-flex items-center px-4 py-2 rounded-lg bg-amber-100 text-amber-800 text-sm font-medium hover:bg-amber-200 disabled:opacity-50"
+            disabled={loading || !calendar}
+            title="清除当前日历的导入内容、备注及本教师本课程年级模板，该教师下所有班级/小组一并清空；空周禁排原因会保留"
+          >
+            {loading ? '正在加载...' : '清除导入数据'}
+          </button>
         </div>
       </div>
 
@@ -845,28 +964,60 @@ const TeachingCalendarPage: React.FC = () => {
             </select>
           </div>
 
-          <div>
+          <div className="md:col-span-2 min-w-0">
             <label className="block text-sm font-medium text-gray-700 mb-1">小组（可选）</label>
             {groupOptions.length > 0 ? (
-              <select
-                className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
-                value={groupId}
-                onChange={(e) => setGroupId(e.target.value)}
-              >
-                {groupOptions.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.label}
-                  </option>
-                ))}
-              </select>
+              <div className="inline-block w-full max-w-xl">
+                <select
+                  className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm pr-8"
+                  value={groupId}
+                  onChange={(e) => setGroupId(e.target.value)}
+                  title={groupOptions.find((g) => g.id === groupId)?.label}
+                >
+                  {groupOptions.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             ) : (
               <input
                 type="text"
                 value={groupId}
                 onChange={(e) => setGroupId(e.target.value)}
                 placeholder="非小组课可留空；小组课自动列出学生姓名"
-                className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
+                className="w-full max-w-xl border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
               />
+            )}
+          </div>
+
+          <div className="md:col-span-2 min-w-0">
+            <label className="block text-sm font-medium text-gray-700 mb-1">排课时间</label>
+            <div
+              className="w-full min-h-[2.5rem] px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 whitespace-pre-line"
+              title={calendar?.schedule_time_summary ?? ''}
+            >
+              {groupOptions.length > 0 && !groupId
+                ? '请先选择小组以显示排课时间'
+                : calendar?.schedule_time_summary
+                  ? calendar.schedule_time_summary.split('；').join('\n')
+                  : calendar
+                    ? '未查到排课记录，请确认是否已在排课结果中为该班级/小组排课'
+                    : '—'}
+            </div>
+            {calendar?.schedule_time_by_class && calendar.schedule_time_by_class.length > 0 && (
+              <div className="mt-2">
+                <span className="text-sm font-medium text-gray-600">本课程各班级排课时间：</span>
+                <ul className="mt-1 space-y-1 text-sm text-gray-700 list-none pl-0">
+                  {calendar.schedule_time_by_class.map((item, idx) => (
+                    <li key={idx} className="flex flex-wrap gap-x-2">
+                      <span className="font-medium text-gray-800">{item.class_names}</span>
+                      <span className="whitespace-pre-line">{item.schedule_time.split('；').join('\n')}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         </div>
@@ -919,13 +1070,21 @@ const TeachingCalendarPage: React.FC = () => {
                   <div className="text-lg font-semibold">武昌理工学院</div>
                   <div className="text-2xl font-bold tracking-widest">教学日历</div>
                   <div className="text-sm text-gray-600">
-                    {(calendar.header.extra_info?.semester_text as string) ||
-                      (calendar.header.academic_year &&
-                      (calendar.header.extra_info?.semester as number | undefined)
-                        ? `${calendar.header.academic_year} 学年第 ${
-                            calendar.header.extra_info?.semester as number
-                          } 学期`
-                        : calendar.header.academic_year || '')}
+                    {(() => {
+                      const raw =
+                        (calendar.header.extra_info?.semester_text as string) ||
+                        (calendar.header.academic_year &&
+                        (calendar.header.extra_info?.semester as number | undefined) != null
+                          ? `${calendar.header.academic_year} 学年第 ${
+                              calendar.header.extra_info?.semester as number
+                            } 学期`
+                          : calendar.header.academic_year || '');
+                      // 避免重复「学期」、多余「级」：只保留规范格式「XXXX-XXXX学年第X学期」
+                      const t = String(raw || '').trim();
+                      if (t.endsWith('学期 学期')) return t.replace(/ 学期\s*$/, '');
+                      if (t.match(/第\d+级/)) return t.replace(/第\d+级\s*/g, '');
+                      return t || '—';
+                    })()}
                   </div>
                 </div>
 
@@ -947,14 +1106,14 @@ const TeachingCalendarPage: React.FC = () => {
                           },
                         })
                       }
-                      className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
                     />
                   </div>
                   <div>
                     <label className="block text-gray-700 mb-1">学院</label>
                     <input
                       type="text"
-                      value={(calendar.header.extra_info?.faculty_name as string) || ''}
+                      value={(calendar.header.extra_info?.faculty_name as string) || '影视传媒学院'}
                       onChange={(e) =>
                         setCalendar({
                           ...calendar,
@@ -967,7 +1126,7 @@ const TeachingCalendarPage: React.FC = () => {
                           },
                         })
                       }
-                      className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
                     />
                   </div>
                   <div>
@@ -987,7 +1146,7 @@ const TeachingCalendarPage: React.FC = () => {
                           },
                         })
                       }
-                      className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
                     />
                   </div>
                   <div>
@@ -1004,7 +1163,7 @@ const TeachingCalendarPage: React.FC = () => {
                         })
                       }
                       rows={3}
-                      className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-sm text-center"
                     />
                     <p className="mt-1 text-xs text-gray-500">
                       小组课可在第二行写入“学⽣姓名列表”，字号在 Word 模板中可略微缩小以容纳更多姓名。
@@ -1027,7 +1186,7 @@ const TeachingCalendarPage: React.FC = () => {
                           },
                         })
                       }
-                      className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
                     />
                   </div>
                   <div>
@@ -1047,7 +1206,7 @@ const TeachingCalendarPage: React.FC = () => {
                           },
                         })
                       }
-                      className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
                     />
                   </div>
                   <div>
@@ -1067,9 +1226,96 @@ const TeachingCalendarPage: React.FC = () => {
                           },
                         })
                       }
-                      className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
                     />
                   </div>
+                  <div>
+                    <label className="block text-gray-700 mb-1">总学时</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={
+                        calendar.header.extra_info?.required_hours != null
+                          ? Number(calendar.header.extra_info.required_hours)
+                          : ''
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const num = v === '' ? undefined : parseInt(v, 10);
+                        setCalendar({
+                          ...calendar,
+                          header: {
+                            ...calendar.header,
+                            extra_info: {
+                              ...calendar.header.extra_info,
+                              required_hours: num === undefined || isNaN(num) ? undefined : num,
+                            },
+                          },
+                        });
+                      }}
+                      placeholder="如 32"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 mb-1">理论学时</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={
+                        calendar.header.extra_info?.theory_hours != null
+                          ? Number(calendar.header.extra_info.theory_hours)
+                          : ''
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const num = v === '' ? undefined : parseInt(v, 10);
+                        setCalendar({
+                          ...calendar,
+                          header: {
+                            ...calendar.header,
+                            extra_info: {
+                              ...calendar.header.extra_info,
+                              theory_hours: num === undefined || isNaN(num) ? undefined : num,
+                            },
+                          },
+                        });
+                      }}
+                      placeholder="如 16"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-gray-700 mb-1">实践学时</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={
+                        calendar.header.extra_info?.practice_hours != null
+                          ? Number(calendar.header.extra_info.practice_hours)
+                          : ''
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        const num = v === '' ? undefined : parseInt(v, 10);
+                        setCalendar({
+                          ...calendar,
+                          header: {
+                            ...calendar.header,
+                            extra_info: {
+                              ...calendar.header.extra_info,
+                              practice_hours: num === undefined || isNaN(num) ? undefined : num,
+                            },
+                          },
+                        });
+                      }}
+                      placeholder="如 16"
+                      className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded-lg shadow-sm focus:ring-purple-500 focus:border-purple-500 text-center"
+                    />
+                  </div>
+                  <p className="text-xs text-gray-500 md:col-span-2">
+                    导出 Word 时第一页按原模板格式填入「总学时X(其中:理论学时Y实践学时Z)」
+                  </p>
                 </div>
               </div>
             )}
@@ -1079,43 +1325,43 @@ const TeachingCalendarPage: React.FC = () => {
                 <table className="min-w-full border border-gray-300 text-sm">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="border border-gray-300 px-2 py-1 text-center w-16">周次</th>
-                      <th className="border border-gray-300 px-2 py-1 text-center w-32">授课日期</th>
-                      <th className="border border-gray-300 px-2 py-1 text-center w-32">节次</th>
-                      <th className="border border-gray-300 px-2 py-1 text-center w-20">学时</th>
-                      <th className="border border-gray-300 px-2 py-1 text-center w-80">教学内容</th>
-                      <th className="border border-gray-300 px-2 py-1 text-center w-80">备注</th>
+                      <th className="border border-gray-300 px-2 py-1 text-center align-middle w-16">周次</th>
+                      <th className="border border-gray-300 px-2 py-1 text-center align-middle w-32">授课日期</th>
+                      <th className="border border-gray-300 px-2 py-1 text-center align-middle w-32">节次</th>
+                      <th className="border border-gray-300 px-2 py-1 text-center align-middle w-20">学时</th>
+                      <th className="border border-gray-300 px-2 py-1 text-center align-middle w-80">教学内容</th>
+                      <th className="border border-gray-300 px-2 py-1 text-center align-middle w-80">备注</th>
                     </tr>
                   </thead>
                   <tbody>
                     {calendar.entries.map((entry, idx) => (
-                      <tr key={`${entry.week_number}-${entry.schedule_id || 'empty'}-${idx}`}>
-                        <td className="border border-gray-300 px-2 py-1 text-center align-top">
-                          {entry.week_number}
+                      <tr key={entry.week_range_text ? `range-${entry.week_range_text}-${idx}` : `${entry.week_number}-${entry.schedule_id || 'empty'}-${idx}`}>
+                        <td className="border border-gray-300 px-2 py-1 text-center align-middle">
+                          {entry.week_range_text || entry.week_number}
                         </td>
-                        <td className="border border-gray-300 px-2 py-1 text-center align-top">
+                        <td className="border border-gray-300 px-2 py-1 text-center align-middle">
                           {entry.date_text || ''}
                         </td>
-                        <td className="border border-gray-300 px-2 py-1 text-center align-top">
+                        <td className="border border-gray-300 px-2 py-1 text-center align-middle">
                           {entry.period_text || ''}
                         </td>
-                        <td className="border border-gray-300 px-2 py-1 text-center align-top">
+                        <td className="border border-gray-300 px-2 py-1 text-center align-middle">
                           {entry.hours ?? ''}
                         </td>
-                        <td className="border border-gray-300 px-2 py-1 align-top">
+                        <td className="border border-gray-300 px-2 py-1 align-middle bg-sky-50/80">
                           <textarea
                             value={entry.teaching_content || ''}
                             onChange={(e) => handleEntryChange(idx, 'teaching_content', e.target.value)}
-                            rows={2}
-                            className="w-full border-none focus:ring-0 focus:outline-none resize-none"
+                            rows={Math.max(2, Math.min(12, ((entry.teaching_content || '').split(/\r?\n/).length) || 1))}
+                            className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded px-2 py-1 focus:ring-purple-500 focus:border-purple-500 resize-y min-h-[3rem]"
                           />
                         </td>
-                        <td className="border border-gray-300 px-2 py-1 align-top">
+                        <td className="border border-gray-300 px-2 py-1 align-middle bg-sky-50/80">
                           <textarea
                             value={entry.remark || ''}
                             onChange={(e) => handleEntryChange(idx, 'remark', e.target.value)}
-                            rows={2}
-                            className="w-full border-none focus:ring-0 focus:outline-none resize-none"
+                            rows={Math.max(2, Math.min(12, ((entry.remark || '').split(/\r?\n/).length) || 1))}
+                            className="input-cell w-full border border-sky-200 bg-sky-50/80 rounded px-2 py-1 focus:ring-purple-500 focus:border-purple-500 resize-y min-h-[3rem]"
                           />
                         </td>
                       </tr>

@@ -171,11 +171,17 @@ export default function AdminDashboard() {
   const [viewMode, setViewMode] = useState<'grid' | 'compact'>('grid');
   const [showDetails, setShowDetails] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // 加载核心统计数据
   const loadCoreStats = async () => {
+    setLoadError(null);
     try {
-      const [students, courses, rooms, schedules, classes, teachers, assignments] = await Promise.all([
+      const LOAD_TIMEOUT_MS = 20000; // 20 秒超时
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('加载超时，请检查网络或后端服务')), LOAD_TIMEOUT_MS)
+      );
+      const dataPromise = Promise.all([
         studentService.getAll(),
         courseService.getAll(),
         roomService.getAll(),
@@ -183,6 +189,10 @@ export default function AdminDashboard() {
         classService.getAll(),
         teacherService.getAll(),
         studentTeacherAssignmentService.getAll()
+      ]);
+      const [students, courses, rooms, schedules, classes, teachers, assignments] = await Promise.race([
+        dataPromise,
+        timeoutPromise
       ]);
 
       // 班级数据处理：如果为空，从学生数据中提取
@@ -290,6 +300,7 @@ export default function AdminDashboard() {
 
     } catch (error) {
       console.error('获取统计数据失败:', error);
+      setLoadError(error instanceof Error ? error.message : '加载失败');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -731,7 +742,14 @@ export default function AdminDashboard() {
             return isGroupCourse;
           });
           
-          return studentSchedules.length;
+          // 按「节次」统计课时：同一 (星期+节次+周次) 只计 1 课时，与排课结果页一致，避免重复记录导致 16 显示成 32
+          const uniqueSlots = new Set<string>();
+          studentSchedules.forEach(sc => {
+            const week = sc.start_week ?? sc.end_week ?? sc.week_number;
+            const key = `${sc.day_of_week ?? (sc as any).day}_${sc.period}_${week ?? ''}`;
+            uniqueSlots.add(key);
+          });
+          return uniqueSlots.size;
         };
 
         if (student.assigned_teachers?.primary_teacher_id === t.id ||
@@ -857,6 +875,22 @@ export default function AdminDashboard() {
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
         <span className="ml-3 text-gray-600">加载中...</span>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 gap-3">
+        <p className="text-red-600">{loadError}</p>
+        <p className="text-sm text-gray-500">请确认后端已启动（http://localhost:5000）且项目根目录 .env 中配置了 VITE_USE_DATABASE=true 和 VITE_API_URL=http://localhost:5000/api</p>
+        <button
+          type="button"
+          onClick={() => { setLoadError(null); setLoading(true); loadCoreStats(); }}
+          className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700"
+        >
+          重试
+        </button>
       </div>
     );
   }
@@ -2185,7 +2219,7 @@ export default function AdminDashboard() {
           </div>
           {isAdmin && <BlockedTimesImport />}
           <div className="mt-4">
-            <BlockedTimesList />
+            <BlockedTimesList isAdmin={isAdmin} />
           </div>
         </div>
       )}

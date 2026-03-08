@@ -30,7 +30,11 @@ export interface TeachingCalendarHeaderDto {
 export interface TeachingCalendarEntryDto {
   id?: string | null;
   schedule_id?: string | null;
+  /** 分组时多条排课的 id 列表，保存时需展开为多条 entry */
+  schedule_ids?: string[];
   week_number: number;
+  /** 与排课时间一致：如「第1-2、4-17周」 */
+  week_range_text?: string;
   is_empty_week: boolean;
   date?: string | null;
   date_text?: string;
@@ -42,6 +46,10 @@ export interface TeachingCalendarEntryDto {
 
 export interface TeachingCalendarDto {
   header: TeachingCalendarHeaderDto;
+  /** 所选班级/小组的排课时间摘要，直接从排课结果提取（如：第1-9、11-17周 周二第5-6节） */
+  schedule_time_summary?: string | null;
+  /** 专业大课：本课程各班级排课时间（合班为一行，分班每班一行） */
+  schedule_time_by_class?: { class_names: string; schedule_time: string }[] | null;
   entries: TeachingCalendarEntryDto[];
 }
 
@@ -55,6 +63,8 @@ export const teachingCalendarService = {
     course_id: string;
     class_id?: string;
     group_id?: string;
+    /** 小组课：当前小组的学号列表，用于按学号精确匹配排课（与 group_id 二选一或同时使用更准） */
+    group_student_ids?: string;
   }): Promise<TeachingCalendarDto> {
     const query = new URLSearchParams();
     query.set('semester_label', params.semester_label);
@@ -62,6 +72,7 @@ export const teachingCalendarService = {
     query.set('course_id', params.course_id);
     if (params.class_id) query.set('class_id', params.class_id);
     if (params.group_id) query.set('group_id', params.group_id);
+    if (params.group_student_ids) query.set('group_student_ids', params.group_student_ids);
 
     return coreApi.get<TeachingCalendarDto>(`/teaching-calendar?${query.toString()}`);
   },
@@ -79,6 +90,39 @@ export const teachingCalendarService = {
     entries: TeachingCalendarEntryDto[];
   }): Promise<TeachingCalendarDto> {
     return coreApi.post<TeachingCalendarDto>('/teaching-calendar', payload);
+  },
+
+  /**
+   * 清除当前教学日历的已导入数据（教学内容与备注），便于重新导入 Word
+   */
+  async clearEntries(params: {
+    semester_label: string;
+    teacher_id: string;
+    course_id: string;
+    class_id?: string;
+    group_id?: string;
+  }): Promise<TeachingCalendarDto> {
+    const token = getAuthToken();
+    const response = await fetch(`${API_BASE_URL}/teaching-calendar/clear-entries`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Basic ${token}` } : {}),
+      },
+      body: JSON.stringify(params),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let msg = `清除失败: HTTP ${response.status}`;
+      try {
+        const body = JSON.parse(text);
+        if (body && typeof body.error === 'string') msg = body.error;
+      } catch {
+        if (text.length < 300) msg = text;
+      }
+      throw new Error(msg);
+    }
+    return (await response.json()) as TeachingCalendarDto;
   },
 
   /**

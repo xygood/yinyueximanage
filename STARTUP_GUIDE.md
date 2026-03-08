@@ -42,7 +42,7 @@ EXIT;
 
 ```bash
 # 进入项目根目录
-cd <项目根目录>
+cd /Users/gubao/Desktop/0225/music225
 
 # 安装依赖（首次运行）
 npm install
@@ -59,16 +59,18 @@ npm run dev
 
 ```bash
 # 进入项目根目录后执行
-cd <项目根目录>
+cd /Users/gubao/Desktop/0225/music225
 ./server/start_backend.sh
 ```
+
+
 
 后端地址：http://localhost:5000
 
 **教学日历导出 Word 功能** 依赖 `python-docx`。若导出报错「python-docx 未安装」，请先安装依赖并**重启后端**：
 
 ```bash
-cd server
+cd /Users/gubao/Desktop/0225/music225/server
 source venv/bin/activate
 pip install -r requirements.txt
 # 然后重新执行 start_backend.sh
@@ -210,8 +212,8 @@ source venv/bin/activate
 | 服务 | 命令 |
 |------|------|
 | MySQL | `sudo /usr/local/mysql/support-files/mysql.server start` |
-| 前端 | `cd <项目根目录> && npm run dev` |
-| 后端 | `<项目根目录>/server/start_backend.sh` |
+| 前端 | `cd /Users/gubao/Desktop/0225/music225 && npm run dev` |
+| 后端 | `/Users/gubao/Desktop/0225/music225/server/start_backend.sh` |
 
 ---
 

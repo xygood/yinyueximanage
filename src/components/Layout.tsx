@@ -139,19 +139,17 @@ export default function Layout() {
     setShowDropdown(false);
   };
 
-  // 教师可见的核心功能菜单
+  // 教师可见的核心功能菜单（顺序：数据统计、专业小课、专业大课、我的课表、教学日历、通适大课）
   const teacherMenuItems = [
     { path: '/', icon: Home, label: '数据统计' },
-    { path: '/teaching-calendar', icon: Calendar, label: '教学日历' },
-    // 专业小课：教师有专业小课或者是管理员才显示
     ...(hasIndividualCourses || isAdmin
       ? [{ path: '/arrange-class', icon: CalendarPlus, label: '专业小课' }]
       : []),
-    // 专业大课：教师有专业大课或者是管理员才显示
     ...(hasMajorCourses || isAdmin
       ? [{ path: '/major-class-schedule', icon: Music, label: '专业大课' }]
       : []),
-    // 通适大课：仅管理员可见
+    { path: '/faculty-schedule', icon: ClipboardList, label: '我的课表' },
+    { path: '/teaching-calendar', icon: Calendar, label: '教学日历' },
     ...(isAdmin ? [{ path: '/large-class', icon: BookOpen, label: '通适大课' }] : []),
   ];
 
@@ -172,7 +170,7 @@ export default function Layout() {
   // 管理员专用菜单 - 统计与视图
   const adminStatsMenuItems = [
     { path: '/course-schedule-stats', icon: BarChart3, label: '排课统计' },
-    { path: '/faculty-schedule', icon: ClipboardList, label: '排课视图' },
+    { path: '/faculty-schedule', icon: ClipboardList, label: '我的课表' },
     { path: '/workload', icon: Award, label: '课时统计' },
   ];
 
