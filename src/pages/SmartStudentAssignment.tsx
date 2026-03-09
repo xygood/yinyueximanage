@@ -815,6 +815,8 @@ const SmartStudentAssignment: React.FC = () => {
             updated.assigned_teachers.primary_teacher_name = teacher?.name || undefined;
             updated.assigned_teacher_id = teacherId || undefined;
             updated.assigned_teacher_name = teacher?.name || undefined;
+            // 同步更新主字段，避免专业小课页面仍用 teacher_id 匹配导致原教师处仍显示该学生
+            updated.teacher_id = teacherId || undefined;
           } else if (position === 'secondary1') {
             updated.assigned_teachers.secondary1_teacher_id = teacherId || undefined;
             updated.assigned_teachers.secondary1_teacher_name = teacher?.name || undefined;

@@ -16,6 +16,7 @@ if [ ! -f ".env" ]; then
     exit 1
 fi
 
+mkdir -p ../logs
 nohup python app.py > ../logs/server.log 2>&1 &
 echo $! > ../logs/server.pid
 

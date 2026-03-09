@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote_plus
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,7 +26,8 @@ class Config:
     MYSQL_USER = os.environ.get('MYSQL_USER', 'scheduler')
     MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', 'Scheduler@2026')
     MYSQL_DATABASE = os.environ.get('MYSQL_DATABASE', 'music_scheduler')
-    MYSQL_SQLALCHEMY_URI = f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
+    _mysql_password_encoded = quote_plus(MYSQL_PASSWORD)
+    MYSQL_SQLALCHEMY_URI = f"mysql+pymysql://{MYSQL_USER}:{_mysql_password_encoded}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}?charset=utf8mb4"
     
     SOCKETIO_MESSAGE_QUEUE = None
     CORS_ORIGINS = "*"
@@ -39,7 +41,7 @@ class ProductionConfig(Config):
     USE_MYSQL = True
     SECRET_KEY = os.environ.get('SECRET_KEY', 'music-scheduler-secret-key-2026')
     MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', 'Scheduler@2026')
-    SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{os.environ.get('MYSQL_USER', 'scheduler')}:{os.environ.get('MYSQL_PASSWORD', 'Scheduler@2026')}@{os.environ.get('MYSQL_HOST', 'localhost')}:{os.environ.get('MYSQL_PORT', '3306')}/{os.environ.get('MYSQL_DATABASE', 'music_scheduler')}?charset=utf8mb4"
+    SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{os.environ.get('MYSQL_USER', 'scheduler')}:{quote_plus(os.environ.get('MYSQL_PASSWORD', 'Scheduler@2026'))}@{os.environ.get('MYSQL_HOST', 'localhost')}:{os.environ.get('MYSQL_PORT', '3306')}/{os.environ.get('MYSQL_DATABASE', 'music_scheduler')}?charset=utf8mb4"
 
 class LocalConfig(Config):
     DEBUG = True

@@ -13,11 +13,31 @@ from models.semester_week_config import SemesterWeekConfig
 from models.large_class_schedule import LargeClassSchedule
 from . import api_bp
 import uuid
+import re
 from datetime import datetime
 import hashlib
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
+
+def _normalize_semester(value):
+    """将备份中的 semester 转为 INT 或 None。支持整数或字符串如 '2025级第2学期'、'第2学期'。"""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        m = re.search(r'第?\s*(\d+)\s*学期', s)
+        if m:
+            return int(m.group(1))
+        try:
+            return int(s)
+        except ValueError:
+            return None
+    return None
 
 @api_bp.route('/sync/all', methods=['GET'])
 def get_all_data():
@@ -208,7 +228,7 @@ def import_data():
                     student_name=c.get('student_name'),
                     major_class=c.get('major_class'),
                     academic_year=c.get('academic_year'),
-                    semester=c.get('semester'),
+                    semester=_normalize_semester(c.get('semester')),
                     semester_label=c.get('semester_label'),
                     course_category=c.get('course_category', 'general'),
                     primary_instrument=c.get('primary_instrument'),
@@ -268,7 +288,7 @@ def import_data():
                     faculty_id=s.get('faculty_id'),
                     semester_label=s.get('semester_label'),
                     academic_year=s.get('academic_year'),
-                    semester=s.get('semester'),
+                    semester=_normalize_semester(s.get('semester')),
                     status=s.get('status', 'scheduled'),
                     group_id=s.get('group_id'),
                     class_id=s.get('class_id'),
@@ -297,7 +317,7 @@ def import_data():
                     faculty_id=s.get('faculty_id'),
                     semester_label=s.get('semester_label'),
                     academic_year=s.get('academic_year'),
-                    semester=s.get('semester'),
+                    semester=_normalize_semester(s.get('semester')),
                     status=s.get('status', 'scheduled'),
                     group_id=s.get('group_id'),
                     class_id=s.get('class_id'),
@@ -326,7 +346,7 @@ def import_data():
                     faculty_id=s.get('faculty_id'),
                     semester_label=s.get('semester_label'),
                     academic_year=s.get('academic_year'),
-                    semester=s.get('semester'),
+                    semester=_normalize_semester(s.get('semester')),
                     status=s.get('status', 'scheduled'),
                     group_id=s.get('group_id'),
                     class_id=s.get('class_id'),

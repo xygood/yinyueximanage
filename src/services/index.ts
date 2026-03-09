@@ -87,6 +87,9 @@ export const teacherService = {
   },
 
   async importTeacherRoomsByFaculty(entries: any[]) {
+    if (USE_DATABASE) {
+      return apiService.teachersApi.importRooms(entries);
+    }
     return localStorageService.teacherService.importTeacherRoomsByFaculty(entries);
   }
 };

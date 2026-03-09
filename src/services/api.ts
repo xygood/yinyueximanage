@@ -72,6 +72,8 @@ export const teachersApi = {
     api.post<any>(`/teachers/${teacherId}/rooms`, { room_id: roomId, faculty_code: facultyCode }),
   removeRoom: (teacherId: string, roomId: string) =>
     api.delete(`/teachers/${teacherId}/rooms/${roomId}`),
+  importRooms: (entries: any[]) =>
+    api.post<{ success: number; failed: number; errors: string[] }>('/teachers/import-rooms', entries),
 };
 
 export const studentsApi = {

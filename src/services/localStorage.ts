@@ -4,13 +4,27 @@ import type { Teacher, Student, Course, Room, ScheduledClass, Conflict, FACULTIE
 import { setTeacherRoomByFaculty, getFacultyCodeForInstrument } from '../types';
 import DataConsistencyService from './dataConsistencyService';
 
-// 密码哈希函数 - 使用简单的 SHA-256
+// 简单哈希兜底（在不支持 crypto.subtle 的环境下使用）
+function fallbackHashHex(input: string): string {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) {
+    hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
+// 密码哈希函数 - 优先使用 SHA-256，缺失时退化为简单哈希
 async function hashPassword(password: string): Promise<string> {
+  const subtle = (globalThis as any).crypto?.subtle;
+  if (!subtle || typeof subtle.digest !== 'function') {
+    return fallbackHashHex(password);
+  }
+
   const encoder = new TextEncoder();
   const data = encoder.encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashBuffer = await subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // 类型定义 - 兼容旧版本的department字段

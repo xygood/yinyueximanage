@@ -81,9 +81,20 @@ const WEEKDAYS = [
 async function getDeterministicGroupId(courseId: string, studentIds: string[]): Promise<string> {
   const sorted = studentIds.slice().sort();
   const key = `${courseId}|${sorted.join(',')}`;
+
+  const subtle = (globalThis as any).crypto?.subtle;
+  if (!subtle || typeof subtle.digest !== 'function') {
+    // 不支持 crypto.subtle 时使用简单哈希，仍然保证同一批学生得到同一个 group_id
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+    }
+    return 'g_' + hash.toString(16).padStart(8, '0');
+  }
+
   const encoder = new TextEncoder();
   const data = encoder.encode(key);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashBuffer = await subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
   return 'g_' + hashHex.slice(0, 32);
@@ -587,6 +598,8 @@ export default function ArrangeClass() {
           allBlockedTimes.push({
             class_name: b.class_name,
             class_associations: b.class_associations,
+            // 保留教师信息，用于按照教师维度禁排
+            teacher_name: b.teacher_name,
             weeks,
             day,
             day_of_week: day,
@@ -649,6 +662,8 @@ export default function ArrangeClass() {
           if (weeks.length > 0 && periods.length > 0 && entry.day_of_week) {
             allBlockedTimes.push({
               class_name: className,
+              // 通适大课对应的授课教师（可能为多位教师，以逗号分隔）
+              teacher_name: entry.teacher_name,
               weeks: [...new Set(weeks)].sort((a, b) => a - b),
               day: entry.day_of_week,
               periods: [...new Set(periods)].sort((a, b) => a - b),
@@ -672,6 +687,7 @@ export default function ArrangeClass() {
     try {
       const currentClass = groupStudents.length > 0 ? (groupStudents[0].major_class || groupStudents[0].class_name || '') : '';
       const allClasses = groupStudents.length > 0 ? Array.from(new Set(groupStudents.map((s: any) => s.major_class || s.class_name || '').filter((c: string) => c))) : [];
+      const effectiveTeacherName = (targetTeacher?.name || teacher?.name || '').trim();
 
       // 预计算占用/禁排集合，避免在 7x10 循环内重复遍历大数组，降低 CPU 占用
       const teacherIdSet = getCurrentTeacherIdSet();
@@ -694,11 +710,28 @@ export default function ArrangeClass() {
         }
       });
       unifiedBlockedTimes.forEach((slot: any) => {
-        if (!isBlockedMatchClass(slot, allClasses.length > 0 ? allClasses : currentClass)) return;
         const weeks = Array.isArray(slot.weeks) ? slot.weeks : [];
         if (weeks.length > 0 && !weeks.includes(selectedWeek)) return;
+
         const d = slot.day_of_week !== undefined ? slot.day_of_week : slot.day;
         const periods = slot.periods || [];
+        if (!d || periods.length === 0) return;
+
+        // 1）按班级维度匹配禁排
+        const classMatches = isBlockedMatchClass(slot, allClasses.length > 0 ? allClasses : currentClass);
+
+        // 2）按教师维度匹配禁排（例如：教师在该时段上通适大课或专业大课）
+        let teacherMatches = false;
+        if (effectiveTeacherName && slot.teacher_name) {
+          const teacherNames = String(slot.teacher_name)
+            .split(/[,，、]/)
+            .map((n: string) => n.trim())
+            .filter(Boolean);
+          teacherMatches = teacherNames.includes(effectiveTeacherName);
+        }
+
+        if (!classMatches && !teacherMatches) return;
+
         periods.forEach((p: number) => blockedSlotSet.add(`${d}_${p}`));
       });
 
@@ -756,14 +789,30 @@ export default function ArrangeClass() {
       return false;
     }
 
-    // 检查班级的专业大课禁排时间数据（支持全班级，统一 day_of_week ?? day）
+    // 检查班级 / 教师的专业大课禁排时间数据（支持全班级，统一 day_of_week ?? day）
     if (unifiedBlockedTimes.length > 0) {
-      const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => isBlockedMatchClass(b, allClasses));
+      const effectiveTeacherName = (targetTeacher?.name || teacher?.name || '').trim();
+      const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => {
+        const classMatches = isBlockedMatchClass(b, allClasses);
+
+        let teacherMatches = false;
+        if (effectiveTeacherName && b.teacher_name) {
+          const teacherNames = String(b.teacher_name)
+            .split(/[,，、]/)
+            .map((n: string) => n.trim())
+            .filter(Boolean);
+          teacherMatches = teacherNames.includes(effectiveTeacherName);
+        }
+
+        return classMatches || teacherMatches;
+      });
       const isBlockedByImported = allClassesBlockedTimes.some((blockedTime: any) => {
-        if (!blockedTime.weeks || !blockedTime.weeks.includes(week)) return false;
+        const weeksArr = Array.isArray(blockedTime.weeks) ? blockedTime.weeks : [];
+        if (weeksArr.length > 0 && !weeksArr.includes(week)) return false;
         const d = blockedTime.day_of_week !== undefined ? blockedTime.day_of_week : blockedTime.day;
         if (d !== day) return false;
-        if (!blockedTime.periods || !blockedTime.periods.includes(period)) return false;
+        const periodsArr = blockedTime.periods || [];
+        if (!periodsArr.includes(period)) return false;
         return true;
       });
       if (isBlockedByImported) return false;
@@ -7276,7 +7325,7 @@ export default function ArrangeClass() {
     // 计算每个节次在整个学期中剩余可排的周数
     const calculateRemainingWeeks = (day: number, period: number): number => {
       const effectiveTeacherId = targetTeacher?.id || teacher?.id;
-      const effectiveTeacherName = targetTeacher?.name || teacher?.name;
+      const effectiveTeacherName = (targetTeacher?.name || teacher?.name || '').trim();
       const studentIds = groupStudents.map((s: any) => s.id);
       const totalWeeks = 17; // 假设学期总周数为17周
       let blockedWeeks = 0;
@@ -7340,17 +7389,32 @@ export default function ArrangeClass() {
           }
         }
 
-        // 检查班级的专业大课禁排时间（支持混合小组，检查所有班级）
+        // 检查班级 / 教师维度的专业大课禁排时间（支持混合小组，检查所有班级 + 当前教师）
         const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => {
           const blockedClassName = b.class_name;
-          return blockedClassName && allClasses.some((className: string) =>
-            blockedClassName.includes(className)
-          );
+          const classMatches =
+            blockedClassName &&
+            allClasses.some((className: string) => blockedClassName.includes(className));
+
+          let teacherMatches = false;
+          if (effectiveTeacherName && b.teacher_name) {
+            const teacherNames = String(b.teacher_name)
+              .split(/[,，、]/)
+              .map((n: string) => n.trim())
+              .filter(Boolean);
+            teacherMatches = teacherNames.includes(effectiveTeacherName);
+          }
+
+          return classMatches || teacherMatches;
         });
+
         const blockedTimeEntry = allClassesBlockedTimes.find((blockedTime: any) => {
-          if (!blockedTime.weeks.includes(week)) return false;
-          if (blockedTime.day !== day) return false;
-          if (!blockedTime.periods.includes(period)) return false;
+          const weeksArr = Array.isArray(blockedTime.weeks) ? blockedTime.weeks : [];
+          if (weeksArr.length > 0 && !weeksArr.includes(week)) return false;
+          const d = blockedTime.day_of_week !== undefined ? blockedTime.day_of_week : blockedTime.day;
+          if (d !== day) return false;
+          const periodsArr = blockedTime.periods || [];
+          if (!periodsArr.includes(period)) return false;
           return true;
         });
         if (blockedTimeEntry) {
@@ -7459,22 +7523,50 @@ export default function ArrangeClass() {
       }
 
       // 检查班级的专业大课禁排时间数据（支持混合小组，检查所有班级）
+      const effectiveTeacherName = (targetTeacher?.name || teacher?.name || '').trim();
       const allClassesBlockedTimes = unifiedBlockedTimes.filter((b: any) => {
         const blockedClassName = b.class_name;
-        return blockedClassName && allClasses.some((className: string) =>
-          blockedClassName.includes(className)
-        );
+        const classMatches =
+          blockedClassName &&
+          allClasses.some((className: string) => blockedClassName.includes(className));
+
+        let teacherMatches = false;
+        if (effectiveTeacherName && b.teacher_name) {
+          const teacherNames = String(b.teacher_name)
+            .split(/[,，、]/)
+            .map((n: string) => n.trim())
+            .filter(Boolean);
+          teacherMatches = teacherNames.includes(effectiveTeacherName);
+        }
+
+        return classMatches || teacherMatches;
       });
 
       const blockedTimeEntry = allClassesBlockedTimes.find((blockedTime: any) => {
-        if (!blockedTime.weeks.includes(selectedWeek)) return false;
-        if (blockedTime.day !== day) return false;
-        if (!blockedTime.periods.includes(period)) return false;
+        const weeksArr = Array.isArray(blockedTime.weeks) ? blockedTime.weeks : [];
+        if (weeksArr.length > 0 && !weeksArr.includes(selectedWeek)) return false;
+        const d = blockedTime.day_of_week !== undefined ? blockedTime.day_of_week : blockedTime.day;
+        if (d !== day) return false;
+        const periodsArr = blockedTime.periods || [];
+        if (!periodsArr.includes(period)) return false;
         return true;
       });
 
       if (blockedTimeEntry) {
-        return { blocked: true, reason: blockedTimeEntry.reason || '班级禁排时间' };
+        // 如果是按教师维度匹配到的禁排，提示教师禁排时间；否则提示班级禁排
+        let isTeacherBlocked = false;
+        if (effectiveTeacherName && blockedTimeEntry.teacher_name) {
+          const teacherNames = String(blockedTimeEntry.teacher_name)
+            .split(/[,，、]/)
+            .map((n: string) => n.trim())
+            .filter(Boolean);
+          isTeacherBlocked = teacherNames.includes(effectiveTeacherName);
+        }
+
+        return {
+          blocked: true,
+          reason: blockedTimeEntry.reason || (isTeacherBlocked ? '教师禁排时间' : '班级禁排时间')
+        };
       }
 
       // 检查学生是否已经被其他老师排课（跨教师，全局检查）
