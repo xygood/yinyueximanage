@@ -716,8 +716,9 @@ const SmartStudentAssignment: React.FC = () => {
     // 2304班级：主项为空，副项1-3显示导入数据
     if (isClass2304) {
       const primaryMajor = ''; // 主项为空
-      const secondary1Major = student.secondary_instrument1 || (student.secondary_instruments && student.secondary_instruments[0]) || '';
-      const secondary2Major = student.secondary_instrument2 || (student.secondary_instruments && student.secondary_instruments[1]) || '';
+      // 优先使用统一的 secondary_instruments 数组，避免旧字段与新字段不一致
+      const secondary1Major = (student.secondary_instruments && student.secondary_instruments[0]) || student.secondary_instrument1 || '';
+      const secondary2Major = (student.secondary_instruments && student.secondary_instruments[1]) || student.secondary_instrument2 || '';
       const secondary3Major = student.secondary_instrument3 || (student.secondary_instruments && student.secondary_instruments[2]) || '';
       
       // 教师分配映射
@@ -740,8 +741,8 @@ const SmartStudentAssignment: React.FC = () => {
     } else {
       // 其他班级：正常显示主项和副项1-2，副项3为空
       const primaryMajor = student.primary_instrument || student.instrument || '';
-      const secondary1Major = student.secondary_instrument1 || (student.secondary_instruments && student.secondary_instruments[0]) || '';
-      const secondary2Major = student.secondary_instrument2 || (student.secondary_instruments && student.secondary_instruments[1]) || '';
+      const secondary1Major = (student.secondary_instruments && student.secondary_instruments[0]) || student.secondary_instrument1 || '';
+      const secondary2Major = (student.secondary_instruments && student.secondary_instruments[1]) || student.secondary_instrument2 || '';
       const secondary3Major = ''; // 普通班副项3为空
       
       const primaryTeacher = student.assigned_teachers?.primary_teacher_name || 

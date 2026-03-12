@@ -25,6 +25,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/major-class-schedule': '专业大课 - 音乐系管理系统',
   '/large-class': '通适大课 - 音乐系管理系统',
   '/operation-logs': '操作日志 - 音乐系管理系统',
+  '/teacher-schedule-conflicts': '教师时间冲突检查 - 音乐系管理系统',
   '/login': '登录 - 音乐系管理系统',
 };
 

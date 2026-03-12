@@ -31,6 +31,7 @@ import TeachingCalendarPage from './pages/TeachingCalendar';
 
 import LargeClass from './pages/LargeClass';
 import OperationLogs from './pages/OperationLogs';
+import TeacherScheduleConflicts from './pages/TeacherScheduleConflicts';
 
 import './index.css';
 
@@ -173,6 +174,8 @@ function AppRoutes() {
         
         {/* 操作日志页面 */}
         <Route path="operation-logs" element={<OperationLogs />} />
+        {/* 教师时间冲突检查（仅管理员） */}
+        <Route path="teacher-schedule-conflicts" element={<TeacherScheduleConflicts />} />
       </Route>
     </Routes>
   );

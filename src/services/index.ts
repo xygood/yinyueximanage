@@ -332,8 +332,16 @@ export const scheduleService = {
     if (USE_DATABASE) {
       return apiService.schedulesApi.batchCreate(schedules);
     }
-    return localStorageService.scheduleService.batchCreate?.(schedules) || 
+    return localStorageService.scheduleService.batchCreate?.(schedules) ||
            localStorageService.scheduleService.createMany?.(schedules);
+  },
+
+  /** 检查所有教师在同一时间是否被排了 2 节及以上课（同星期、同节次、周次重叠） */
+  async getTeacherConflicts(semester_label?: string): Promise<{ conflicts: any[]; count: number }> {
+    if (USE_DATABASE) {
+      return apiService.schedulesApi.getTeacherConflicts(semester_label);
+    }
+    return { conflicts: [], count: 0 };
   }
 };
 

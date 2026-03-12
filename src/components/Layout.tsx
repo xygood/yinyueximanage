@@ -28,6 +28,7 @@ import {
   DatabaseBackup,
   Zap,
   Lightbulb,
+  AlertTriangle,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { STORAGE_KEYS, courseService } from '../services';
@@ -179,6 +180,7 @@ export default function Layout() {
     { path: '/week-config', icon: Calendar, label: '周次配置' },
     { path: '/backup', icon: Database, label: '数据备份' },
     { path: '/operation-logs', icon: ClipboardList, label: '操作日志' },
+    { path: '/teacher-schedule-conflicts', icon: AlertTriangle, label: '教师时间冲突检查' },
   ];
 
   // 测试菜单

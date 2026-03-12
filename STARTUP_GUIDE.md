@@ -11,6 +11,16 @@
 
 ## 🚀 快速启动
 
+**电脑开机后推荐顺序**（按依赖关系，先起数据库再起后端，最后起前端）：
+
+| 顺序 | 服务   | 说明 |
+|------|--------|------|
+| ①    | MySQL  | 后端依赖数据库，必须先启动 |
+| ②    | 后端   | 前端会请求 localhost:5000，建议先起后端 |
+| ③    | 前端   | 最后启动，浏览器打开 http://localhost:5173 |
+
+---
+
 ### 1. 启动 MySQL 服务
 
 ```bash
@@ -36,34 +46,26 @@ FLUSH PRIVILEGES;
 EXIT;
 ```
 
-### 2. 启动前端服务
+### 2. 启动后端服务
 
-在**终端 1**中执行：
+在**终端 1**中执行（任选一种）：
 
-```bash
-# 进入项目根目录
-cd /Users/gubao/Desktop/0225/music225
-
-# 安装依赖（首次运行）
-npm install
-
-# 启动开发服务器
-npm run dev
-```
-
-前端地址：http://localhost:5173
-
-### 3. 启动后端服务
-
-在**终端 2**中执行：
+**方式 A：使用启动脚本（推荐，自动激活虚拟环境）**  
+开机后建议用此方式，一条命令完成。
 
 ```bash
-# 进入项目根目录后执行
 cd /Users/gubao/Desktop/0225/music225
 ./server/start_backend.sh
 ```
 
+**方式 B：进入 server 目录后直接运行**  
+适合已打开 server 目录或想手动激活虚拟环境时使用。
 
+```bash
+cd /Users/gubao/Desktop/0225/music225/server
+source venv/bin/activate   # 先激活虚拟环境
+python app.py
+```
 
 后端地址：http://localhost:5000
 
@@ -75,6 +77,41 @@ source venv/bin/activate
 pip install -r requirements.txt
 # 然后重新执行 start_backend.sh
 ```
+
+**若用方式 A 出现「无法连接」或「监听不对」**：
+
+- 脚本已设置 `HOST=0.0.0.0`，后端会监听本机所有网卡，浏览器用 `http://localhost:5000` 或 `http://127.0.0.1:5000` 均可。
+- 请先看运行 `./server/start_backend.sh` 的终端：是否打印 `Starting server on http://0.0.0.0:5000`、有无报错（如端口被占用、MySQL 连不上）。
+- 在浏览器打开 http://127.0.0.1:5000 或 http://localhost:5000，能打开说明后端正常，再检查前端 `.env` 或 `.env.development` 里是否包含 `VITE_API_URL=http://localhost:5000/api` 或 `http://127.0.0.1:5000/api`。
+- 若仍不行，可改用**方式 B** 在同一终端里手动执行，便于看到后端完整报错信息。
+
+### 3. 启动前端服务
+
+在**终端 2**中执行：
+
+```bash
+# 进入项目根目录
+cd /Users/gubao/Desktop/0225/music225
+
+# 首次运行请先安装依赖
+npm install
+
+# 启动开发服务器
+npm run dev
+```
+
+前端地址：http://localhost:5173
+
+**局域网连接前端**（手机、平板或同一 WiFi 下的另一台电脑访问本机前端）：
+
+1. **本机**已按上面顺序启动 MySQL、后端、前端；后端已监听 `0.0.0.0:5000`（方式 A 脚本默认）。
+2. 启动前端时 Vite 会监听所有网卡，终端里会多一行 **Network: http://192.168.x.x:5173**（`192.168.x.x` 为本机在当前局域网的 IP）。
+3. 在**其他设备**的浏览器中打开：**http://本机局域网IP:5173**（将「本机局域网IP」换成终端里显示的地址，例如 `http://192.168.10.4:5173`）。
+4. 若其他设备打开后接口请求失败（如用 110 登录出现 “failed to fetch”），请确认：
+   - 本机前端已用 **`npm run dev`** 启动且终端里有 **Network: http://192.168.x.x:5173**；
+   - 本机后端已启动且监听 `0.0.0.0:5000`（方式 A 脚本默认）；
+   - 前端会**自动**在从局域网 IP 打开时使用相对路径 `/api`，一般**无需**改 `.env.development`。  
+   若仍失败，可在 `.env.development` 中把 `VITE_API_URL`、`VITE_WS_URL` 留空后重启前端再试。
 
 ---
 

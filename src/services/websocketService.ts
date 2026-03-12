@@ -1,7 +1,16 @@
 import { io, Socket } from 'socket.io-client';
 import { STORAGE_KEYS } from './localStorage';
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'http://localhost:5000';
+// WebSocket 连接地址：
+// - 本地开发：默认连接到 http://localhost:5000
+// - 生产环境（如 47.122.118.106）：默认走当前域名（通过 Nginx 反向代理 /socket.io），不再连 localhost:5000
+const DEFAULT_WS_URL =
+  typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://localhost:5000'
+    : '';
+
+const WS_URL = import.meta.env.VITE_WS_URL || DEFAULT_WS_URL;
 const USE_DATABASE = import.meta.env.VITE_USE_DATABASE === 'true';
 
 class WebSocketService {
@@ -12,11 +21,19 @@ class WebSocketService {
   connect(url: string = WS_URL): Promise<boolean> {
     return new Promise((resolve) => {
       try {
-        this.socket = io(url, {
+        const options = {
           reconnection: true,
           reconnectionAttempts: 5,
           reconnectionDelay: 1000
-        });
+        };
+
+        // 如果有明确的 URL（开发环境或通过 VITE_WS_URL 配置），就用该 URL；
+        // 否则使用当前页面同源（生产环境通过 Nginx 代理 /socket.io）
+        if (url) {
+          this.socket = io(url, options);
+        } else {
+          this.socket = io(options);
+        }
 
         this.socket.on('connect', () => {
           console.log('WebSocket connected');
@@ -170,21 +187,22 @@ class WebSocketService {
 
   // 教师上线
   teacherOnline(data: { teacher_id: string; teacher_name: string; login_time: number }) {
-    if (this.socket && this.isConnected) {
+    // 只要 socket 存在就发送，让 socket.io 在连接建立后自动冲刷缓冲区
+    if (this.socket) {
       this.socket.emit('teacher_online', data);
     }
   }
 
   // 教师下线
   teacherOffline(teacherId: string) {
-    if (this.socket && this.isConnected) {
+    if (this.socket) {
       this.socket.emit('teacher_offline', { teacher_id: teacherId });
     }
   }
 
   // 获取在线教师列表
   getOnlineTeachers() {
-    if (this.socket && this.isConnected) {
+    if (this.socket) {
       this.socket.emit('get_online_teachers');
     }
   }

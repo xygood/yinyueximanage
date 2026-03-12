@@ -42,7 +42,8 @@ if __name__ == '__main__':
     socketio = init_socketio(app)
     
     port = int(os.environ.get('PORT', 5000))
+    host = os.environ.get('HOST', '0.0.0.0')
     debug = env == 'development'
     
-    print(f"Starting server on port {port} (env: {env})")
-    socketio.run(app, host='0.0.0.0', port=port, debug=debug, allow_unsafe_werkzeug=True)
+    print(f"Starting server on http://{host}:{port} (env: {env})")
+    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)

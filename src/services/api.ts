@@ -1,4 +1,16 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// 开发环境：从局域网 IP 打开时强制用相对路径 /api（走 Vite 代理），避免请求发到当前设备本机导致 failed to fetch
+function getApiBaseUrl(): string {
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return '/api';
+    }
+  }
+  const url = import.meta.env.VITE_API_URL;
+  if (url !== undefined && url !== '') return url;
+  return import.meta.env.DEV ? '/api' : '/api';
+}
+const API_BASE_URL = getApiBaseUrl();
 
 const getAuthToken = (): string | null => {
   const userStr = sessionStorage.getItem('music_scheduler_current_user');
@@ -118,6 +130,8 @@ export const schedulesApi = {
   delete: (id: string) => api.delete(`/schedules/${id}`),
   deleteMany: (ids: string[]) => api.post<{ deleted: number; ids: string[] }>('/schedules/batch-delete', { ids }),
   batchCreate: (schedules: any[]) => api.post<any[]>('/schedules/batch', { schedules }),
+  getTeacherConflicts: (semester_label?: string) =>
+    api.get<{ conflicts: any[]; count: number }>(`/schedules/teacher-conflicts${semester_label ? `?semester_label=${encodeURIComponent(semester_label)}` : ''}`),
 };
 
 export const blockedSlotsApi = {

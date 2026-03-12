@@ -525,6 +525,8 @@ export default function Students() {
 
       const primaryInst = formData.primary_instrument;
       const facultyCode = primaryInst === '钢琴' ? 'PIANO' : primaryInst === '声乐' ? 'VOCAL' : primaryInst ? 'INSTRUMENT' : '';
+      const secondaryList = formData.secondary_instruments || [];
+      const [sec1, sec2, sec3] = secondaryList;
 
       await studentService.create({
         teacher_id: user.id,
@@ -534,7 +536,10 @@ export default function Students() {
         grade: gradeNum,
         student_type: formData.student_type,
         primary_instrument: formData.primary_instrument,
-        secondary_instruments: formData.secondary_instruments,
+        secondary_instruments: secondaryList,
+        secondary_instrument1: sec1 || null,
+        secondary_instrument2: sec2 || null,
+        secondary_instrument3: sec3 || null,
         faculty_code: facultyCode,
         remarks: formData.remarks,
         status: 'active'
@@ -640,6 +645,8 @@ export default function Students() {
 
       const primaryInst = editFormData.primary_instrument;
       const facultyCode = primaryInst === '钢琴' ? 'PIANO' : primaryInst === '声乐' ? 'VOCAL' : primaryInst ? 'INSTRUMENT' : '';
+      const secondaryList = editFormData.secondary_instruments || [];
+      const [sec1, sec2, sec3] = secondaryList;
 
       await studentService.update(editingStudent.id, {
         student_id: editFormData.student_id,
@@ -648,7 +655,10 @@ export default function Students() {
         grade: gradeNum,
         student_type: editFormData.student_type,
         primary_instrument: editFormData.primary_instrument,
-        secondary_instruments: editFormData.secondary_instruments,
+        secondary_instruments: secondaryList,
+        secondary_instrument1: sec1 || null,
+        secondary_instrument2: sec2 || null,
+        secondary_instrument3: sec3 || null,
         faculty_code: facultyCode,
         remarks: editFormData.remarks,
         status: 'active'

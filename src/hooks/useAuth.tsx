@@ -67,10 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // 刷新在线教师列表
+  // 刷新在线教师列表：统一通过 WebSocket 向服务器请求，杜绝仅用本地缓存导致只显示自己
   const refreshOnlineTeachers = useCallback(() => {
-    const teachers = authService.getOnlineTeachers();
-    setOnlineTeachers(teachers);
+    websocketService.getOnlineTeachers();
   }, []);
 
   // 刷新已登录用户列表
@@ -170,8 +169,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 定期刷新在线教师列表（每30秒，缩短间隔）
   useEffect(() => {
+    // 首次挂载时向服务器请求一次在线教师列表
     refreshOnlineTeachers();
-    
+
     const refreshInterval = setInterval(() => {
       refreshOnlineTeachers();
     }, 30000);

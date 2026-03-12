@@ -254,4 +254,55 @@ sudo rm -rf /var/www/music-scheduler
 ```
 
 按上述顺序操作即可完成「清理旧数据 + 部署新项目」。  
-文档版本：1.0 | 更新日期：2026-03-08
+
+---
+
+## 六、本地修改后快速更新前端（含 `Students.tsx` 等）
+
+当只修改了前端代码（例如 `src/pages/Students.tsx`、`ArrangeClass.tsx`），后端与数据库未改动时，可按下面步骤**快速更新前端**：
+
+### 1）本机执行
+
+```bash
+cd /Users/gubao/Desktop/0225/music225
+
+# 重新构建前端 dist
+npm run build
+
+# 打包（包含最新 dist 与前端代码）
+rm -f music225.tar.gz
+tar --exclude='node_modules' --exclude='server/venv' --exclude='.git' \
+  --exclude='__pycache__' --exclude='*.pyc' --exclude='server/.env' \
+  --exclude='music225.tar.gz' \
+  -czvf music225.tar.gz .
+
+# 上传到云服务器（47.122.118.106）
+scp music225.tar.gz root@47.122.118.106:/tmp/
+```
+
+### 2）服务器上执行（仅前端改动可只做这一步）
+
+```bash
+ssh root@47.122.118.106
+
+cd /var/www/music-scheduler
+tar -xzvf /tmp/music225.tar.gz -C .
+rm /tmp/music225.tar.gz
+
+# 仅重载 Nginx，使新前端生效（后端无需重启）
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+完成以上步骤后，刷新浏览器页面即可看到最新的前端逻辑（例如学生主项/副项同步到学生分配页面）。
+
+### 3）如同时修改了后端（server 目录），需在服务器重启后端
+
+```bash
+cd /var/www/music-scheduler
+
+# 使用项目自带脚本重启 Flask 后端
+./deploy/stop.sh
+./deploy/start.sh
+```
+
+文档版本：1.2 | 更新日期：2026-03-08

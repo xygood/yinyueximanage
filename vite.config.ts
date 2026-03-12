@@ -33,6 +33,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    host: true, // 允许局域网访问，终端会显示 Network: http://192.168.x.x:5173
     open: true,
     hmr: {
       overlay: true
@@ -41,6 +42,10 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:5000',
         changeOrigin: true
+      },
+      '/socket.io': {
+        target: 'http://localhost:5000',
+        ws: true
       }
     }
   },
