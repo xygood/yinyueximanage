@@ -141,6 +141,7 @@ __pycache__/
 # Backup files
 backups/
 *.bak
+*.backup
 *.json.bak
 
 # Environment files

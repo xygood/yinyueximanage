@@ -4681,7 +4681,6 @@ export default function ArrangeClass() {
     const pkxxData: any[] = [];
     // 按课程类型和学期分别计数
     const courseTypeIndex: Record<string, number> = {};
-    const weekDayMap: Record<number, string> = { 1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日' };
     
     // 直接使用scheduleResults中的数据
     scheduleResults.forEach((result) => {
@@ -4729,6 +4728,24 @@ export default function ArrangeClass() {
       // 获取教师工号
       const teacherInfo = availableTeachers.find(t => t.name === result.teacherName);
       const teacherWorkId = teacherInfo?.teacher_id || '';
+
+      // 从排课结果列表提取并汇总全部班级，兼容混合班级小组
+      const classNames = Array.from(new Set(
+        [
+          ...(result.students || []).map((student: any) => student.className || ''),
+          ...String(result.studentClasses || '').split('<br>'),
+          result.studentClass || '',
+        ].map((name: string) => String(name).trim()).filter(Boolean)
+      ));
+      const className = classNames.join(',');
+      const classNumber = Array.from(new Set(
+        classNames
+          .map((name: string) => {
+            const match = name.match(/\d+/);
+            return match ? match[0] : '';
+          })
+          .filter(Boolean)
+      )).join(',');
       
       // 从originalSchedules中提取排课时间信息，并按星期和节次分组合并周次
       const schedules = result.originalSchedules || [];
@@ -4779,13 +4796,15 @@ export default function ArrangeClass() {
               return `${range.start}-${range.end}`;
             }
           });
-          const skzc = `第${rangeStrings.join('、')}周`;
+          const skzc = rangeStrings.join(',');
           
           pkxxData.push({
             JXBID: jxbid,
             XNXQ: xnxq,
             JXBBH: jxbid,
             JXBMC: jxbmc,
+            BJMC: className,
+            BJBH: classNumber,
             KCBH: courseNumber,
             KCMC: courseName,
             RKJSID: parseInt(teacherWorkId?.replace(/\D/g, '') || '0') || 0,
@@ -4798,8 +4817,8 @@ export default function ArrangeClass() {
             ZC: '',
             SHOWZC: '',
             SKZC: skzc,
-            SKXQ: weekDayMap[timeGroup.day] || '',
-            JCFW: `第${timeGroup.period}节`,
+            SKXQ: String(timeGroup.day || ''),
+            JCFW: String(timeGroup.period || ''),
             LXJC: '1',
             CRMC: timeGroup.room_name || result.room_name || '',
             CRBH: timeGroup.room_id || result.room_id || '',

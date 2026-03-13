@@ -268,6 +268,8 @@ export interface PKXXEntry {
   XNXQ: string;
   JXBBH: string;
   JXBMC: string;
+  BJMC: string;
+  BJBH: string;
   KCBH: string;
   KCMC: string;
   RKJSID: number;
@@ -340,6 +342,8 @@ export const standardExportUtils = {
       'XNXQ': entry.XNXQ,
       'JXBBH': entry.JXBBH,
       'JXBMC': entry.JXBMC,
+      'BJMC': entry.BJMC,
+      'BJBH': entry.BJBH,
       'KCBH': entry.KCBH,
       'KCMC': entry.KCMC,
       'RKJSID': entry.RKJSID,
