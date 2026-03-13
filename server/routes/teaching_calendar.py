@@ -991,10 +991,23 @@ def _build_calendar_entries(
                 schedules_by_week.setdefault(week, []).append(s)
 
     # 同年级教学内容与备注：谁上传谁使用，仅当前教师的模板生效；无则兼容 teacher_id 为空的旧模板
+    # 对于小组课（header.class_id 为空），需要从排课中推断一个代表性班级，以便按「年级+班型」共用模板
     grade_content_by_week: Dict[int, str] = {}
     grade_remark_by_week: Dict[int, str] = {}
-    grade = _extract_grade_from_class_id(class_id)
-    class_type = _extract_class_type_from_class_id(db, class_id)
+    grade_source_class_id = class_id
+    if not grade_source_class_id:
+        # 从排课中找出第一个有 class_id 或 Student.major_class 的记录作为年级来源
+        for s in schedules:
+            cid = (getattr(s, "class_id", "") or "").strip()
+            if not cid and getattr(s, "student_id", None):
+                st = db.query(Student).filter(Student.student_id == s.student_id).first()
+                if st and getattr(st, "major_class", None):
+                    cid = (st.major_class or "").strip()
+            if cid:
+                grade_source_class_id = cid
+                break
+    grade = _extract_grade_from_class_id(grade_source_class_id)
+    class_type = _extract_class_type_from_class_id(db, grade_source_class_id)
     if grade and course:
         ids_to_match = [str(course.id), course.course_id] if course.course_id else [str(course.id)]
         teacher_id = header.teacher_id
@@ -2231,17 +2244,21 @@ def import_teaching_calendar():
                     if cid and cid not in ids_to_match:
                         ids_to_match.append(cid)
             teacher_id = header.teacher_id
-            gtc = (
-                db.query(GradeTeachingContent)
-                .filter(
-                    GradeTeachingContent.semester_label == semester_label,
-                    GradeTeachingContent.grade == grade,
-                    GradeTeachingContent.class_type == class_type,
-                    GradeTeachingContent.teacher_id == teacher_id,
-                    GradeTeachingContent.course_id.in_(ids_to_match),
+            try:
+                gtc = (
+                    db.query(GradeTeachingContent)
+                    .filter(
+                        GradeTeachingContent.semester_label == semester_label,
+                        GradeTeachingContent.grade == grade,
+                        GradeTeachingContent.class_type == class_type,
+                        GradeTeachingContent.teacher_id == teacher_id,
+                        GradeTeachingContent.course_id.in_(ids_to_match),
+                    )
+                    .first()
                 )
-                .first()
-            )
+            except OperationalError:
+                # 数据库尚未添加 required_hours/theory_hours/practice_hours 等新列时，跳过年级模板保存，避免 500
+                gtc = None
             if gtc:
                 gtc.content_items = content_items
                 gtc.remark_items = remark_items

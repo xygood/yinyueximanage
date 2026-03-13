@@ -93,6 +93,7 @@ pip install -r requirements.txt
 # 进入项目根目录
 cd /Users/gubao/Desktop/0225/music225
 
+
 # 首次运行请先安装依赖
 npm install
 
