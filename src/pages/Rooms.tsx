@@ -47,6 +47,7 @@ export default function Rooms() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
+  const [importMode, setImportMode] = useState<'update' | 'overwrite'>('update');
   const [activeTab, setActiveTab] = useState<'teacher-rooms' | 'large-classrooms'>('teacher-rooms');
   const [largeClassrooms, setLargeClassrooms] = useState<Room[]>([]);
   const [selectedLargeClassroom, setSelectedLargeClassroom] = useState<Room | null>(null);
@@ -112,12 +113,16 @@ export default function Rooms() {
       
       // 调试信息：显示过滤后的有效数据
 
-      const result = await teacherService.importTeacherRoomsByFaculty(validMappedData);
+      const result = await teacherService.importTeacherRoomsByFaculty(validMappedData, importMode);
 
+      const modeText = importMode === 'overwrite' ? '覆盖模式' : '更新模式';
+      const skipped = (result as any).skipped || 0;
+      const updatedIdentifiers = (result as any).updatedIdentifiers || [];
       if (result.errors.length > 0) {
-        setUploadProgress(`导入完成：成功 ${result.success} 条，失败 ${result.failed} 条`);
+        setUploadProgress(`导入完成：成功 ${result.success} 条，跳过 ${skipped} 条，失败 ${result.failed} 条`);
       } else {
-        setUploadProgress(`成功导入 ${result.success} 位教师的琴房关联`);
+        const updatedText = updatedIdentifiers.length > 0 ? `；更新名单：${updatedIdentifiers.join('、')}` : '';
+        setUploadProgress(`${modeText}：更新 ${result.success} 位，跳过 ${skipped} 位教师${updatedText}`);
       }
 
       // 刷新数据
@@ -191,14 +196,26 @@ export default function Rooms() {
       // 如果选择了"创建新琴房"或"创建新大教室"
       if (selectedRoomId === 'NEW' && newRoomName.trim()) {
         const isLargeClassroom = editState.facultyCode === LARGE_CLASSROOM_CONFIG.faculty_code;
-        const newRoom = await roomService.create({
-          teacher_id: isLargeClassroom ? '' : editState.teacherId, // 大教室不绑定特定教师
-          room_name: newRoomName.trim(),
-          room_type: isLargeClassroom ? '大教室' : '琴房',
-          capacity: isLargeClassroom ? 50 : 1, // 大教室容量更大
-          faculty_code: editState.facultyCode,
-        });
-        roomId = newRoom.id;
+        const normalizedName = newRoomName.trim();
+        const targetRoomType = isLargeClassroom ? '大教室' : '琴房';
+        const existingRoom = allRooms.find(r =>
+          r.room_name.trim() === normalizedName &&
+          r.room_type === targetRoomType &&
+          (isLargeClassroom ? true : r.faculty_code === editState.facultyCode)
+        );
+
+        if (existingRoom) {
+          roomId = existingRoom.id;
+        } else {
+          const newRoom = await roomService.create({
+            teacher_id: isLargeClassroom ? '' : editState.teacherId, // 大教室不绑定特定教师
+            room_name: normalizedName,
+            room_type: targetRoomType,
+            capacity: isLargeClassroom ? 50 : 1, // 大教室容量更大
+            faculty_code: editState.facultyCode,
+          });
+          roomId = newRoom.id;
+        }
       }
 
       // 如果清空了选择
@@ -252,15 +269,23 @@ export default function Rooms() {
 
   // 根据专业代码获取可用琴房列表
   const getAvailableRooms = (facultyCode: string) => {
-    if (facultyCode === LARGE_CLASSROOM_CONFIG.faculty_code) {
-      // 大教室：显示所有大教室类型的房间
-      return allRooms.filter(r => r.room_type === '大教室');
-    }
-    return allRooms.filter(r => {
+    const filteredRooms = facultyCode === LARGE_CLASSROOM_CONFIG.faculty_code
+      ? allRooms.filter(r => r.room_type === '大教室')
+      : allRooms.filter(r => {
       // 如果琴房没有专业代码，显示在钢琴琴房列表中
       if (!r.faculty_code) return facultyCode === 'PIANO';
       return r.faculty_code === facultyCode;
     });
+
+    // 历史数据可能存在同名重复记录，下拉框按名称去重，避免重复选项
+    const uniqueByName = new Map<string, Room>();
+    for (const room of filteredRooms) {
+      const key = room.room_name.trim();
+      if (!uniqueByName.has(key)) {
+        uniqueByName.set(key, room);
+      }
+    }
+    return Array.from(uniqueByName.values());
   };
 
   // 筛选后的琴房列表
@@ -329,7 +354,7 @@ export default function Rooms() {
 
       {/* 搜索区域 - 紧凑布局 */}
       <div className="card mb-4">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -339,6 +364,18 @@ export default function Rooms() {
               onChange={(e) => setSearchTerm(e.target.value)}
               className="input pl-10"
             />
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600 whitespace-nowrap">导入模式</span>
+            <select
+              value={importMode}
+              onChange={(e) => setImportMode(e.target.value as 'update' | 'overwrite')}
+              className="input h-10 py-2 min-w-[120px]"
+              disabled={uploading}
+            >
+              <option value="update">更新</option>
+              <option value="overwrite">覆盖</option>
+            </select>
           </div>
           <input
             ref={fileInputRef}
@@ -353,6 +390,9 @@ export default function Rooms() {
             <span className="text-sm text-purple-600">{uploadProgress}</span>
           </div>
         )}
+        <div className="mt-2 text-xs text-gray-500">
+          更新：仅更新导入文件中有值的教师-教室关系；覆盖：先清空该教师现有关联，再按文件重建。
+        </div>
       </div>
 
       {/* 标签页切换 */}

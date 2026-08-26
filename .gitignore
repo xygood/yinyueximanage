@@ -161,3 +161,19 @@ test-*.js
 test-*.ts
 *.test.js
 *.test.ts
+
+# Data files (student/exam data, do not push)
+*.xlsx
+*.xls
+*.csv
+*.pdf
+*.docx
+*.doc
+文档/
+
+# One-off data analysis scripts
+analyze_*.py
+check_*.py
+extract_*.py
+csv_to_excel*.py
+replace_excel_values.js

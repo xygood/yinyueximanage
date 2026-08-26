@@ -5,6 +5,61 @@ from models.room import Room
 from . import api_bp
 import uuid
 from datetime import datetime
+from sqlalchemy.orm.attributes import flag_modified
+
+
+def _propagate_teacher_work_id_change(db, old_tid: str, new_tid: str) -> None:
+    """修改教师工号后，同步业务表中存放的 teacher_id（工号）字符串。"""
+    from models.schedule import ScheduledClass
+    from models.course import Course
+    from models.user import User
+    from models.student_teacher_assignment import StudentTeacherAssignment
+    from models.teaching_calendar import TeachingCalendarHeader
+    from models.grade_teaching_content import GradeTeachingContent
+    from models.student import Student
+
+    db.query(ScheduledClass).filter(ScheduledClass.teacher_id == old_tid).update(
+        {ScheduledClass.teacher_id: new_tid}, synchronize_session=False
+    )
+    db.query(Course).filter(Course.teacher_id == old_tid).update(
+        {Course.teacher_id: new_tid}, synchronize_session=False
+    )
+    db.query(Room).filter(Room.teacher_id == old_tid).update(
+        {Room.teacher_id: new_tid}, synchronize_session=False
+    )
+    db.query(User).filter(User.teacher_id == old_tid).update(
+        {User.teacher_id: new_tid}, synchronize_session=False
+    )
+    db.query(StudentTeacherAssignment).filter(StudentTeacherAssignment.teacher_id == old_tid).update(
+        {StudentTeacherAssignment.teacher_id: new_tid}, synchronize_session=False
+    )
+    db.query(TeachingCalendarHeader).filter(TeachingCalendarHeader.teacher_id == old_tid).update(
+        {TeachingCalendarHeader.teacher_id: new_tid}, synchronize_session=False
+    )
+    db.query(GradeTeachingContent).filter(GradeTeachingContent.teacher_id == old_tid).update(
+        {GradeTeachingContent.teacher_id: new_tid}, synchronize_session=False
+    )
+
+    for col in (
+        Student.teacher_id,
+        Student.secondary1_teacher_id,
+        Student.secondary2_teacher_id,
+        Student.secondary3_teacher_id,
+    ):
+        db.query(Student).filter(col == old_tid).update({col: new_tid}, synchronize_session=False)
+
+    students_at = db.query(Student).filter(Student.assigned_teachers.isnot(None)).all()
+    for s in students_at:
+        at = s.assigned_teachers
+        if not isinstance(at, dict):
+            continue
+        changed = False
+        for k, v in list(at.items()):
+            if v == old_tid:
+                at[k] = new_tid
+                changed = True
+        if changed:
+            flag_modified(s, 'assigned_teachers')
 
 @api_bp.route('/teachers', methods=['GET'])
 def get_teachers():
@@ -70,12 +125,32 @@ def create_teacher():
 def update_teacher(teacher_id):
     db = next(get_db())
     try:
-        teacher = db.query(Teacher).filter(Teacher.teacher_id == teacher_id).first()
+        teacher = db.query(Teacher).filter(
+            (Teacher.teacher_id == teacher_id) | (Teacher.id == teacher_id)
+        ).first()
         if not teacher:
             return jsonify({'error': 'Teacher not found'}), 404
-        data = request.get_json()
-        
-        # 允许的字段白名单
+        data = request.get_json() or {}
+
+        # 工号变更：允许更新 teacher_id，并同步排课/课程等表中的工号字段
+        raw_new_tid = data.get('teacher_id')
+        if raw_new_tid is not None:
+            new_tid = str(raw_new_tid).strip()
+            old_tid = str(teacher.teacher_id or '').strip()
+            if new_tid and new_tid != old_tid:
+                conflict = db.query(Teacher).filter(
+                    Teacher.teacher_id == new_tid,
+                    Teacher.id != teacher.id
+                ).first()
+                if conflict:
+                    return jsonify({'error': f'工号 {new_tid} 已被其他教师使用'}), 400
+                _propagate_teacher_work_id_change(db, old_tid, new_tid)
+                teacher.teacher_id = new_tid
+                # 历史数据：若主键曾等于工号，一并更新主键以保证一致
+                if str(teacher.id) == str(old_tid):
+                    teacher.id = new_tid
+
+        # 允许的字段白名单（不含 teacher_id，已单独处理）
         ALLOWED_FIELDS = [
             'name', 'full_name', 'email', 'phone', 'department',
             'faculty_id', 'faculty_code', 'faculty_name', 'position',
@@ -83,8 +158,10 @@ def update_teacher(teacher_id):
             'max_students_per_class', 'fixed_room_id', 'fixed_rooms',
             'qualifications', 'remarks'
         ]
-        
+
         for key, value in data.items():
+            if key == 'teacher_id':
+                continue
             if key in ALLOWED_FIELDS and hasattr(teacher, key):
                 setattr(teacher, key, value)
         db.commit()
@@ -179,7 +256,7 @@ def get_teacher_room_mappings():
                 teacher_key = t.id or t.teacher_id
                 teacher_mappings[teacher_key] = {
                     'teacher': {
-                        'id': t.id,
+                        'id': t.teacher_id,
                         'teacher_id': t.teacher_id,
                         'name': t.name,
                         'full_name': t.full_name,
@@ -204,10 +281,16 @@ def assign_room_to_teacher(teacher_id):
         faculty_code = data.get('faculty_code')
         
         fixed_rooms = teacher.fixed_rooms or []
-        if not any(r.get('room_id') == room_id for r in fixed_rooms):
+        # 按专业更新：同一 faculty_code 只保留一个房间关联
+        if faculty_code:
+            fixed_rooms = [r for r in fixed_rooms if r.get('faculty_code') != faculty_code]
             fixed_rooms.append({'room_id': room_id, 'faculty_code': faculty_code})
-            teacher.fixed_rooms = fixed_rooms
-            db.commit()
+        else:
+            if not any(r.get('room_id') == room_id for r in fixed_rooms):
+                fixed_rooms.append({'room_id': room_id})
+
+        teacher.fixed_rooms = fixed_rooms
+        db.commit()
         return jsonify(teacher.to_dict())
     except Exception as e:
         db.rollback()
@@ -238,10 +321,19 @@ def import_teacher_rooms():
     """批量导入教师琴房关联"""
     db = next(get_db())
     try:
-        entries = request.get_json()
+        payload = request.get_json()
+        if isinstance(payload, dict):
+            entries = payload.get('entries', [])
+            mode = payload.get('mode', 'update')
+        else:
+            entries = payload or []
+            mode = 'update'
         success = 0
         failed = 0
+        skipped = 0
         errors = []
+        updated_identifiers = []
+        skipped_identifiers = []
         
         for entry in entries:
             teacher_identifier = entry.get('teacherIdentifier')
@@ -258,7 +350,17 @@ def import_teacher_rooms():
                 errors.append(f'教师不存在: {teacher_identifier}')
                 continue
             
-            fixed_rooms = teacher.fixed_rooms or []
+            before_rooms = teacher.fixed_rooms or []
+            fixed_rooms = list(before_rooms)
+            if mode == 'overwrite':
+                fixed_rooms = []
+            
+            def _room_id_of(item):
+                if isinstance(item, dict):
+                    return item.get('room_id')
+                if isinstance(item, str):
+                    return item
+                return None
             
             # 处理各类琴房
             room_types = [
@@ -285,7 +387,7 @@ def import_teacher_rooms():
                         db.flush()
                     
                     # 检查教师是否已关联该琴房
-                    if not any(r.get('room_id') == room.id for r in fixed_rooms):
+                    if not any(_room_id_of(r) == room.id for r in fixed_rooms):
                         fixed_rooms.append({
                             'room_id': room.id,
                             'room_name': room.room_name,
@@ -308,20 +410,45 @@ def import_teacher_rooms():
                     db.add(room)
                     db.flush()
                 
-                if not any(r.get('room_id') == room.id for r in fixed_rooms):
+                if not any(_room_id_of(r) == room.id for r in fixed_rooms):
                     fixed_rooms.append({
                         'room_id': room.id,
                         'room_name': room.room_name,
                         'room_type': '大教室'
                     })
             
+            def _normalize_rooms(rooms):
+                pairs = []
+                for r in (rooms or []):
+                    # 兼容历史脏数据：可能是 dict，也可能是字符串
+                    if isinstance(r, dict):
+                        faculty = r.get('faculty_code') or r.get('room_type') or ''
+                        room_id = r.get('room_id') or ''
+                    elif isinstance(r, str):
+                        faculty = ''
+                        room_id = r
+                    else:
+                        faculty = ''
+                        room_id = str(r)
+                    pairs.append(f'{faculty}:{room_id}')
+                return sorted(pairs)
+
+            if _normalize_rooms(before_rooms) == _normalize_rooms(fixed_rooms):
+                skipped += 1
+                skipped_identifiers.append(teacher_identifier)
+                continue
+
             teacher.fixed_rooms = fixed_rooms
             success += 1
+            updated_identifiers.append(teacher_identifier)
         
         db.commit()
         return jsonify({
             'success': success,
             'failed': failed,
+            'skipped': skipped,
+            'updatedIdentifiers': updated_identifiers,
+            'skippedIdentifiers': skipped_identifiers,
             'errors': errors
         })
     except Exception as e:

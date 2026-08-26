@@ -84,8 +84,8 @@ export const teachersApi = {
     api.post<any>(`/teachers/${teacherId}/rooms`, { room_id: roomId, faculty_code: facultyCode }),
   removeRoom: (teacherId: string, roomId: string) =>
     api.delete(`/teachers/${teacherId}/rooms/${roomId}`),
-  importRooms: (entries: any[]) =>
-    api.post<{ success: number; failed: number; errors: string[] }>('/teachers/import-rooms', entries),
+  importRooms: (entries: any[], mode: 'update' | 'overwrite' = 'update') =>
+    api.post<{ success: number; failed: number; skipped?: number; updatedIdentifiers?: string[]; skippedIdentifiers?: string[]; errors: string[] }>('/teachers/import-rooms', { entries, mode }),
 };
 
 export const studentsApi = {
@@ -187,6 +187,22 @@ export const syncApi = {
   clear: () => api.post('/sync/clear', {}),
 };
 
+export const examSamplingApi = {
+  extract: (params: { total_slots?: number; seed?: number; base_per_teacher?: number; class_balance_teachers?: string[] }) =>
+    api.post<{ results: any[]; total: number; teacher_coverage: number; total_teachers: number; missing_teachers: string[]; class_distribution: Record<string, number> }>('/exam-sampling/extract', params),
+  exportCsv: (params: { total_slots?: number; seed?: number; base_per_teacher?: number; class_balance_teachers?: string[] }) => {
+    const token = getAuthToken();
+    return fetch(`${API_BASE_URL}/exam-sampling/export-csv`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Basic ${token}` } : {}),
+      },
+      body: JSON.stringify(params),
+    });
+  },
+};
+
 export default {
   api,
   teachersApi,
@@ -199,4 +215,5 @@ export default {
   semesterConfigsApi,
   authApi,
   syncApi,
+  examSamplingApi,
 };

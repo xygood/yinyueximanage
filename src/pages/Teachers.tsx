@@ -35,6 +35,58 @@ import {
   ChevronRight
 } from 'lucide-react';
 
+/** Excel/CSV 中的工号单元格可能是数字，统一为数字字符串 */
+function normalizeWorkIdCell(raw: unknown): string {
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return String(Math.round(raw));
+  }
+  let s = String(raw).trim().replace(/\s+/g, '');
+  if (/^\d+\.\d+$/.test(s)) {
+    const n = Number(s);
+    if (Number.isFinite(n)) return String(Math.round(n));
+  }
+  return s;
+}
+
+async function readTeacherImportWorkbook(file: File): Promise<XLSX.WorkBook> {
+  const lower = file.name.toLowerCase();
+  if (lower.endsWith('.csv')) {
+    const text = await file.text();
+    return XLSX.read(text, { type: 'string', raw: false });
+  }
+  const buf = await file.arrayBuffer();
+  try {
+    return XLSX.read(buf, { type: 'array', cellDates: true });
+  } catch (e1) {
+    try {
+      const u8 = new Uint8Array(buf);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < u8.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, Array.from(u8.subarray(i, i + chunk)) as unknown as number[]);
+      }
+      return XLSX.read(binary, { type: 'binary', cellDates: true });
+    } catch {
+      const msg = e1 instanceof Error ? e1.message : String(e1);
+      throw new Error(`无法解析 Excel：${msg}`);
+    }
+  }
+}
+
+function workbookToTeacherRows(workbook: XLSX.WorkBook): any[] {
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false }) as any[];
+    if (!rows.length) continue;
+    const keys = Object.keys(rows[0]).map(k => String(k).trim()).filter(Boolean);
+    const hasId = keys.some(k => k === '工号' || k === 'teacher_id' || k.includes('工号'));
+    const hasName = keys.some(k => k === '姓名' || k === 'name' || k === '教师姓名' || k.includes('姓名'));
+    if (hasId && hasName) return rows;
+  }
+  throw new Error('未找到有效工作表：请确认表头含「工号」与「姓名」（可下载页面上的导入模板）');
+}
+
 const Teachers: React.FC = () => {
   const { teacher: currentUser } = useAuth();
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -185,6 +237,9 @@ const Teachers: React.FC = () => {
       setShowModal(false);
     } catch (error) {
       console.error('保存教师失败:', error);
+      window.alert(
+        error instanceof Error ? error.message : '保存失败，请重试或查看控制台错误信息'
+      );
     }
   };
 
@@ -220,18 +275,8 @@ const Teachers: React.FC = () => {
     setImportResult(null);
 
     try {
-      // 读取并解析 Excel 文件
-      const reader = new FileReader();
-      const excelData = await new Promise<ArrayBuffer>((resolve, reject) => {
-        reader.onload = (event) => resolve(event.target?.result as ArrayBuffer);
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(file);
-      });
-
-      const workbook = XLSX.read(excelData, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const jsonData = XLSX.utils.sheet_to_json(worksheet) as any[];
+      const workbook = await readTeacherImportWorkbook(file);
+      const jsonData = workbookToTeacherRows(workbook);
 
       setUploadProgress(`正在导入 ${jsonData.length} 位教师...`);
 
@@ -240,6 +285,8 @@ const Teachers: React.FC = () => {
       let updated = 0;
       let skipped = 0;
       const failedRecords: Array<{ row: number; reason: string }> = [];
+
+      let teachersSnapshot = await teacherService.getAll();
 
       // 教研室代码映射
       const facultyCodeMap: Record<string, string> = {
@@ -265,20 +312,25 @@ const Teachers: React.FC = () => {
         const row = jsonData[i];
         setUploadProgress(`正在导入 ${i + 1}/${jsonData.length} 条记录...`);
 
+        const rawId =
+          row['工号'] ?? row['teacher_id'] ?? row['Teacher ID'] ?? row['职工号'];
+        const rawName =
+          row['姓名'] ?? row['name'] ?? row['教师姓名'] ?? row['Name'];
+
         // 验证必填字段
-        if (!row['工号'] || !row['姓名']) {
+        if (rawId === undefined || rawId === '' || rawName === undefined || rawName === '') {
           skipped++;
           failedRecords.push({ row: i + 2, reason: '工号或姓名为空' });
           continue;
         }
 
-        const teacherId = String(row['工号']).trim();
-        const name = String(row['姓名']).trim();
+        const teacherId = normalizeWorkIdCell(rawId);
+        const name = String(rawName).trim();
 
-        // 验证工号格式（9位数字）
-        if (!/^\d{9}$/.test(teacherId)) {
+        // 验证工号格式（常见学校工号 6～12 位数字）
+        if (!/^\d{6,12}$/.test(teacherId)) {
           skipped++;
-          failedRecords.push({ row: i + 2, reason: '工号格式错误（需为9位数字）' });
+          failedRecords.push({ row: i + 2, reason: '工号格式错误（需为 6～12 位数字）' });
           continue;
         }
 
@@ -340,16 +392,23 @@ const Teachers: React.FC = () => {
           remarks: row['备注'] || ''
         };
 
-        // 先检查是否已存在
-        const existing = await teacherService.getByTeacherId(teacherId);
+        // 先检查是否已存在（仅精确匹配工号/主键，避免姓名模糊匹配误更新）
+        const existing = teachersSnapshot.find(
+          t =>
+            String(t.teacher_id).trim() === teacherId ||
+            String(t.id).trim() === teacherId
+        );
         if (existing) {
-          // 更新现有教师
-          await teacherService.update(existing.id, teacherData);
+          const updatedTeacher = await teacherService.update(existing.id, teacherData);
           updated++;
+          const idx = teachersSnapshot.findIndex(
+            t => t.id === existing.id || t.teacher_id === existing.teacher_id
+          );
+          if (idx >= 0) teachersSnapshot[idx] = updatedTeacher;
         } else {
-          // 创建新教师
-          await teacherService.create(teacherData);
+          const createdTeacher = await teacherService.create(teacherData);
           created++;
+          teachersSnapshot.push(createdTeacher);
         }
 
         // 生成默认密码（仅对新创建的教师）
@@ -366,14 +425,18 @@ const Teachers: React.FC = () => {
         details
       });
 
-      // 记录操作日志
-      await operationLogService.log(
-        '导入教师数据',
-        'system',
-        `导入教师数据：新增 ${created} 位，更新 ${updated} 位，跳过 ${skipped} 位`,
-        undefined,
-        undefined
-      );
+      // 记录操作日志（失败不影响导入结果）
+      try {
+        await operationLogService.log(
+          '导入教师数据',
+          'system',
+          `导入教师数据：新增 ${created} 位，更新 ${updated} 位，跳过 ${skipped} 位`,
+          undefined,
+          undefined
+        );
+      } catch (logErr) {
+        console.warn('记录操作日志失败:', logErr);
+      }
 
       // 重新加载教师数据
       const teachersData = await teacherService.getAll();
@@ -384,7 +447,11 @@ const Teachers: React.FC = () => {
       }, 1500);
     } catch (error) {
       console.error('导入失败:', error);
-      setUploadProgress('导入失败，请检查文件格式是否为有效的Excel文件');
+      const hint =
+        error instanceof Error
+          ? error.message
+          : '请确认文件为 .xlsx / .xls / .csv，或下载模板后勿修改表头行';
+      setUploadProgress(`导入失败：${hint}`);
       setUploading(false);
     }
   };
@@ -981,11 +1048,11 @@ const Teachers: React.FC = () => {
                 <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-blue-500 transition-colors">
                   <FileSpreadsheet className="w-12 h-12 mx-auto text-gray-400 mb-4" />
                   <p className="text-gray-600 mb-2">点击或拖拽上传教师Excel文件</p>
-                  <p className="text-sm text-gray-500 mb-4">支持 .xlsx, .xls 格式</p>
+                  <p className="text-sm text-gray-500 mb-4">支持 .xlsx、.xls、.csv 格式</p>
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".xlsx,.xls"
+                    accept=".xlsx,.xls,.csv"
                     onChange={handleFileUpload}
                     className="hidden"
                   />

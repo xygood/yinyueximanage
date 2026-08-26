@@ -86,11 +86,30 @@ export const teacherService = {
     return localStorageService.teacherService.getAvailableTeachers?.(instrument) || [];
   },
 
-  async importTeacherRoomsByFaculty(entries: any[]) {
+  async importTeacherRoomsByFaculty(entries: any[], mode: 'update' | 'overwrite' = 'update') {
     if (USE_DATABASE) {
-      return apiService.teachersApi.importRooms(entries);
+      return apiService.teachersApi.importRooms(entries, mode);
     }
-    return localStorageService.teacherService.importTeacherRoomsByFaculty(entries);
+    return localStorageService.teacherService.importTeacherRoomsByFaculty(entries, mode);
+  },
+
+  async updateTeacherRoomByFaculty(teacherId: string, facultyCode: string, roomId: string) {
+    if (USE_DATABASE) {
+      return apiService.teachersApi.assignRoom(teacherId, roomId, facultyCode);
+    }
+    return localStorageService.teacherService.updateTeacherRoomByFaculty(teacherId, facultyCode, roomId);
+  },
+
+  async clearTeacherRoomByFaculty(teacherId: string, facultyCode: string) {
+    if (USE_DATABASE) {
+      const teacher = await apiService.teachersApi.getById(teacherId);
+      const fixedRooms = teacher?.fixed_rooms || [];
+      const target = fixedRooms.find((r: any) => r?.faculty_code === facultyCode);
+      if (!target?.room_id) return teacher;
+      await apiService.teachersApi.removeRoom(teacherId, target.room_id);
+      return apiService.teachersApi.getById(teacherId);
+    }
+    return localStorageService.teacherService.clearTeacherRoomByFaculty(teacherId, facultyCode);
   }
 };
 

@@ -120,6 +120,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
       if (!isAdmin && (teacher?.id || teacher?.teacher_id || user?.teacher_id)) {
         filters.teacherId = teacher?.id || user?.teacher_id;
         if (teacher?.teacher_id) filters.teacherWorkId = teacher.teacher_id;
+        filters.teacherName = teacher?.name || teacher?.full_name || user?.full_name || undefined;
       }
       
       const data = await scheduleViewService.getViewSchedules(filters);
@@ -139,12 +140,7 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
     }
   }, [loadSchedules, initialSchedules]);
 
-  // 教师登录时默认选中其教研室
-  useEffect(() => {
-    if (!isAdmin && teacher?.faculty_id && selectedFaculty === null) {
-      setSelectedFaculty(teacher.faculty_id);
-    }
-  }, [isAdmin, teacher?.faculty_id]);
+  // 教师登录时默认不过滤教研室，避免多专业教师（如同时带钢琴/器乐）课程被隐藏
 
   // 教研室视图以稳定浏览为主，这里不启用实时订阅，避免频繁闪烁加载状态
 
@@ -196,40 +192,48 @@ const FacultyScheduleView: React.FC<FacultyScheduleViewProps> = ({
     });
   }, [displaySchedules, selectedInstrument, selectedTeacherId, teachers]);
 
-  // 获取琴房名称（与 ArrangeClass 相同的后备逻辑）
+  // 推断当前排课对应的教研室代码（用于匹配教师 fixed_rooms）
+  const inferFacultyCodeForSchedule = useCallback((schedule: ScheduleClassView): string | null => {
+    const direct = getFacultyCodeForInstrument((schedule as any).specificInstrument || schedule.instrument);
+    if (direct) return direct;
+
+    const text = `${(schedule as any).courseName || ''}${(schedule as any).studentClass || ''}`;
+    if (text.includes('钢琴')) return 'PIANO';
+    if (text.includes('声乐')) return 'VOCAL';
+    if (text.includes('器乐')) return 'INSTRUMENT';
+    return null;
+  }, []);
+
+  // 获取琴房名称：优先按教师固定琴房(按专业匹配)，再回退排课记录中的房间
   const getRoomName = useCallback((schedule: ScheduleClassView): string => {
-    // 1. 直接使用 schedule 中的 roomName
-    if (schedule.roomName) {
-      return schedule.roomName;
-    }
-    
-    // 2. 如果有 room_id，从 rooms 数组中查找
-    if (schedule.room_id || (schedule as any).roomId) {
-      const roomId = schedule.room_id || (schedule as any).roomId;
-      const room = rooms.find(r => r.id === roomId || r.room_id === roomId);
-      if (room?.room_name) {
-        return room.room_name;
-      }
-    }
-    
-    // 3. 根据教师固定琴房查找
     const teacher = teachers.find(t => t.name === schedule.teacherName);
-    if (teacher) {
-      if (teacher.fixed_rooms && teacher.fixed_rooms.length > 0) {
-        return teacher.fixed_rooms.map(fr => {
-          const room = rooms.find(r => r.id === fr.room_id || r.room_id === fr.room_id);
-          return room?.room_name || fr.room_id;
-        }).join('、');
-      } else if (teacher.fixed_room_id) {
-        const room = rooms.find(r => r.id === teacher.fixed_room_id || r.room_id === teacher.fixed_room_id);
+    const facultyCode = inferFacultyCodeForSchedule(schedule);
+
+    if (teacher?.fixed_rooms && teacher.fixed_rooms.length > 0) {
+      const targetFixedRoom = facultyCode
+        ? teacher.fixed_rooms.find(fr => fr.faculty_code === facultyCode)
+        : teacher.fixed_rooms[0];
+
+      if (targetFixedRoom?.room_id) {
+        const room = rooms.find(r => r.id === targetFixedRoom.room_id || r.room_id === targetFixedRoom.room_id);
         if (room?.room_name) {
           return room.room_name;
         }
       }
     }
-    
+
+    // 回退：使用排课记录中的房间信息
+    if (schedule.roomName) {
+      return schedule.roomName;
+    }
+    if (schedule.room_id || (schedule as any).roomId) {
+      const roomId = schedule.room_id || (schedule as any).roomId;
+      const room = rooms.find(r => r.id === roomId || r.room_id === roomId);
+      if (room?.room_name) return room.room_name;
+    }
+
     return '';
-  }, [rooms, teachers]);
+  }, [rooms, teachers, inferFacultyCodeForSchedule]);
 
   // 获取某时段某天的所有课程（支持多个课程显示）
   const getSchedulesAt = (day: number, period: number): ScheduleClassView[] => {

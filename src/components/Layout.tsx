@@ -183,6 +183,11 @@ export default function Layout() {
     { path: '/teacher-schedule-conflicts', icon: AlertTriangle, label: '教师时间冲突检查' },
   ];
 
+  // 管理员专用菜单 - 考试管理
+  const adminExamMenuItems = [
+    { path: '/exam-sampling', icon: Award, label: '考试抽查' },
+  ];
+
   // 测试菜单
   const testMenuItems = [
     { path: '/test-dashboard', icon: FlaskConical, label: '测试仪表板' },
@@ -262,6 +267,17 @@ export default function Layout() {
                       : 'text-gray-600 hover:bg-green-50 hover:text-green-700'
                     }`}
                 >
+                  <item.icon className="w-5 h-5" />
+                  <span>{item.label}</span>
+                </NavLink>
+              ))}
+
+              {/* 考试管理 */}
+              <div className="pt-6 pb-2">
+                <p className="px-4 text-xs font-semibold text-gray-400 uppercase tracking-wider">考试管理</p>
+              </div>
+              {adminExamMenuItems.map((item) => (
+                <NavLink key={item.path} to={item.path} className={({ isActive }) => `flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${isActive ? 'bg-red-100 text-red-700 font-medium' : 'text-gray-600 hover:bg-red-50 hover:text-red-700'}`}>
                   <item.icon className="w-5 h-5" />
                   <span>{item.label}</span>
                 </NavLink>

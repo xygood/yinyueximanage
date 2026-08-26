@@ -32,6 +32,7 @@ import TeachingCalendarPage from './pages/TeachingCalendar';
 import LargeClass from './pages/LargeClass';
 import OperationLogs from './pages/OperationLogs';
 import TeacherScheduleConflicts from './pages/TeacherScheduleConflicts';
+import ExamSampling from './pages/ExamSampling';
 
 import './index.css';
 
@@ -176,6 +177,8 @@ function AppRoutes() {
         <Route path="operation-logs" element={<OperationLogs />} />
         {/* 教师时间冲突检查（仅管理员） */}
         <Route path="teacher-schedule-conflicts" element={<TeacherScheduleConflicts />} />
+        {/* 考试抽查 */}
+        <Route path="exam-sampling" element={<ExamSampling />} />
       </Route>
     </Routes>
   );

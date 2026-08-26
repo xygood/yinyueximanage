@@ -105,6 +105,7 @@ export interface ViewFilters {
   instrument?: string; // 具体乐器
   teacherId?: string;   // 教师 id 或工号，匹配 scheduled_classes.teacher_id
   teacherWorkId?: string; // 教师工号，与 teacherId 二选一或同时用于匹配
+  teacherName?: string; // 教师姓名（兜底匹配，兼容历史 teacher_id 不一致）
   weekRange?: {
     startWeek: number;
     endWeek: number;
@@ -611,6 +612,12 @@ export const scheduleViewService = {
    */
   async getScheduleResults(filters?: ViewFilters): Promise<ScheduleResult[]> {
     try {
+      const normalizeName = (name?: string) =>
+        (name || '')
+          .trim()
+          .replace(/\s+/g, '')
+          .replace(/老师$/, '');
+
       let scheduledClasses: any[] = [];
       let students: any[] = [];
       let courses: any[] = [];
@@ -666,12 +673,18 @@ export const scheduleViewService = {
           }
         }
         
-        if (filters.teacherId || filters.teacherWorkId) {
+        if (filters.teacherId || filters.teacherWorkId || filters.teacherName) {
           const ids = [filters.teacherId, filters.teacherWorkId].filter(Boolean);
+          const teacherName = normalizeName(filters.teacherName);
           results = results.filter(r =>
-            r.originalSchedules.some((s: any) =>
-              ids.includes(s.teacher_id)
-            )
+            // 1) 先看原始排课中的 teacher_id / teacher_name（最准确）
+            r.originalSchedules.some((s: any) => {
+              const scheduleTeacherName = normalizeName(s.teacher_name);
+              return ids.includes(s.teacher_id) ||
+                (teacherName !== '' && scheduleTeacherName === teacherName);
+            }) ||
+            // 2) 兜底看聚合结果里的 teacherName（兼容历史 teacher_name 丢失/不一致）
+            (teacherName !== '' && normalizeName(r.teacherName) === teacherName)
           );
         }
       }

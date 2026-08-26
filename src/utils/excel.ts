@@ -240,6 +240,7 @@ export interface KKXXEntry {
   XNXQ: string;
   JXBBH: string;
   JXBMC: string;
+  BJBH: string;
   FJXBID: string;
   FJXBBH: string;
   BJRS: number;
@@ -256,11 +257,17 @@ export interface KKXXEntry {
   KSXS: string;
   JXMS: string;
   KSFS: string;
+   // 周次学时，格式如 1-5:1,7-13:1
+  ZCXSH: string;
+  // 连排节次（与排课信息中的连续节次一致）
+  LPJC: string;
   SFXK: string;
   SFPK: string;
   XB: string;
   RKJS: string;
   JXBZC: string;
+  // 教学班组成（学号），导出小组内所有学生学号
+  JXBZC_XH: string;
 }
 
 export interface PKXXEntry {
@@ -270,6 +277,10 @@ export interface PKXXEntry {
   JXBMC: string;
   BJMC: string;
   BJBH: string;
+  // 小组人数：数据来源于排课结果中的小组人数
+  groupSizeNumber: number;
+  // 学生名单：与开课信息教学班组成（姓名）一致
+  studentNameList: string;
   KCBH: string;
   KCMC: string;
   RKJSID: number;
@@ -284,6 +295,8 @@ export interface PKXXEntry {
   SKZC: string;
   SKXQ: string;
   JCFW: string;
+  // 排课次数：统计当前行覆盖的周次数 * 连续节次（本导出场景固定按 1 计）
+  periodCount: number;
   LXJC: string;
   CRMC: string;
   CRBH: string;
@@ -307,78 +320,85 @@ export interface XSXKEntry {
 export const standardExportUtils = {
   exportKKXX(data: KKXXEntry[], fileName: string = '开课信息') {
     const exportData = data.map(entry => ({
-      'JXBID': entry.JXBID,
-      'XNXQ': entry.XNXQ,
-      'JXBBH': entry.JXBBH,
-      'JXBMC': entry.JXBMC,
-      'FJXBID': entry.FJXBID,
-      'FJXBBH': entry.FJXBBH,
-      'BJRS': entry.BJRS,
-      'KCMC': entry.KCMC,
-      'KCBH': entry.KCBH,
-      'XF': entry.XF,
-      'KCXZ': entry.KCXZ,
-      'KKYXMC': entry.KKYXMC,
-      'KKYXBH': entry.KKYXBH,
-      'KKJYSMC': entry.KKJYSMC,
-      'KKJYSBH': entry.KKJYSBH,
-      'SFSJHJ': entry.SFSJHJ,
-      'SKFS': entry.SKFS,
-      'KSXS': entry.KSXS,
-      'JXMS': entry.JXMS,
-      'KSFS': entry.KSFS,
-      'SFXK': entry.SFXK,
-      'SFPK': entry.SFPK,
-      'XB': entry.XB,
-      'RKJS': entry.RKJS,
-      'JXBZC': entry.JXBZC,
+      '教学班级ID': entry.JXBID,
+      '学年学期': entry.XNXQ,
+      '教学班编号': entry.JXBBH,
+      '教学班级名称': entry.JXBMC,
+      '班级编号': entry.BJBH,
+      '分教学班ID': entry.FJXBID,
+      '分教学班编号': entry.FJXBBH,
+      '班级人数': entry.BJRS,
+      '课程名称': entry.KCMC,
+      '课程编号': entry.KCBH,
+      '学分': entry.XF,
+      '课程性质': entry.KCXZ,
+      '开课院系名称': entry.KKYXMC,
+      '开课院系编号': entry.KKYXBH,
+      '开课教研室名称': entry.KKJYSMC,
+      '开课教研室编号': entry.KKJYSBH,
+      '是否双机合计': entry.SFSJHJ,
+      '授课方式': entry.SKFS,
+      '考试形式': entry.KSXS,
+      '教学模式': entry.JXMS,
+      '考试方式': entry.KSFS,
+      '周次学时': entry.ZCXSH,
+      '连排节次': entry.LPJC,
+      '是否限选': entry.SFXK,
+      '是否排课': entry.SFPK,
+      '校区': entry.XB,
+      '任课教师': entry.RKJS,
+      '教学班组成（姓名）': entry.JXBZC,
+      '教学班组成（学号）': entry.JXBZC_XH,
     }));
     exportUtils.exportToExcel(exportData, fileName, '开课信息');
   },
 
   exportPKXX(data: PKXXEntry[], fileName: string = '排课信息') {
     const exportData = data.map(entry => ({
-      'JXBID': entry.JXBID,
-      'XNXQ': entry.XNXQ,
-      'JXBBH': entry.JXBBH,
-      'JXBMC': entry.JXBMC,
-      'BJMC': entry.BJMC,
-      'BJBH': entry.BJBH,
-      'KCBH': entry.KCBH,
-      'KCMC': entry.KCMC,
-      'RKJSID': entry.RKJSID,
-      'RKJSGH': entry.RKJSGH,
-      'RKJSXM': entry.RKJSXM,
-      'FJID': entry.FJID,
-      'FJMC': entry.FJMC,
-      'XN': entry.XN,
-      'XQ': entry.XQ,
-      'ZC': entry.ZC,
-      'SHOWZC': entry.SHOWZC,
-      'SKZC': entry.SKZC,
-      'SKXQ': entry.SKXQ,
-      'JCFW': entry.JCFW,
-      'LXJC': entry.LXJC,
-      'CRMC': entry.CRMC,
-      'CRBH': entry.CRBH,
+      '教学班级ID': entry.JXBID,
+      '学年学期': entry.XNXQ,
+      '教学班编号': entry.JXBBH,
+      '教学班级名称': entry.JXBMC,
+      '班级名称': entry.BJMC,
+      '班级编号': entry.BJBH,
+      '小组人数': entry.groupSizeNumber,
+      '学生名单': entry.studentNameList,
+      '课程编号': entry.KCBH,
+      '课程名称': entry.KCMC,
+      '任课教师ID': entry.RKJSID,
+      '任课教师工号': entry.RKJSGH,
+      '任课教师姓名': entry.RKJSXM,
+      '辅讲教师ID': entry.FJID,
+      '辅讲教师名称': entry.FJMC,
+      '学年': entry.XN,
+      '学期': entry.XQ,
+      '周次': entry.ZC,
+      '显示周次': entry.SHOWZC,
+      '上课周次': entry.SKZC,
+      '上课星期': entry.SKXQ,
+      '节次范围': entry.JCFW,
+      '排课次数': entry.periodCount,
+      '连续节次': entry.LXJC,
+      '教室名称': entry.CRMC,
+      '教室编号': entry.CRBH,
     }));
     exportUtils.exportToExcel(exportData, fileName, '排课信息');
   },
 
   exportXSXK(data: XSXKEntry[], fileName: string = '学生选课数据') {
     const exportData = data.map(entry => ({
-      'XNXQ': entry.XNXQ,
-      'XH': entry.XH,
-      'XM': entry.XM,
-      'JXBID': entry.JXBID,
-      'JXBBH': entry.JXBBH,
-      'JXBMC': entry.JXBMC,
-      'KCBH': entry.KCBH,
-      'KCMC': entry.KCMC,
-      'RKJS': entry.RKJS,
-      'JSGH': entry.JSGH,
-      'XDXZ': entry.XDXZ,
-      'XDFS': entry.XDFS,
+      '学年学期': entry.XNXQ,
+      '学号': entry.XH,
+      '姓名': entry.XM,
+      '教学班级ID': entry.JXBID,
+      '教学班编号': entry.JXBBH,
+      '教学班级名称': entry.JXBMC,
+      '课程编号': entry.KCBH,
+      '课程名称': entry.KCMC,
+      '任课教师': entry.RKJS,
+      '教师工号': entry.JSGH,
+      '选修性质': entry.XDXZ,
+      '选课方式': entry.XDFS,
     }));
     exportUtils.exportToExcel(exportData, fileName, '学生选课数据');
   },

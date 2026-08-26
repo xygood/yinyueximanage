@@ -88,19 +88,18 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
     }
   };
 
+  const facultyExclusiveInstruments: Record<string, string[]> = {
+    PIANO: ['钢琴'],
+    VOCAL: ['声乐'],
+    INSTRUMENT: ['古筝', '竹笛', '葫芦丝', '古琴', '双排键', '小提琴', '萨克斯']
+  };
+
   // 从教师数据中动态获取可教课程列表
   const facultyInstruments = useMemo(() => {
     const result: Record<string, string[]> = {
       PIANO: ['钢琴'],
       VOCAL: ['声乐'],
       INSTRUMENT: []
-    };
-
-    // 各教研室专属乐器
-    const facultyExclusiveInstruments: Record<string, string[]> = {
-      PIANO: ['钢琴'],
-      VOCAL: ['声乐'],
-      INSTRUMENT: ['古筝', '竹笛', '葫芦丝', '古琴', '双排键', '小提琴', '萨克斯']
     };
 
     // 器乐教研室的专属乐器集合
@@ -131,8 +130,22 @@ const FacultyFilter: React.FC<FacultyFilterProps> = ({
   const facultyTeachers = useMemo(() => {
     if (!selectedFaculty) return [];
 
+    const canTeachByFaculty = (teacher: Teacher, facultyCode: string) => {
+      const teachable = new Set<string>([
+        ...(teacher.can_teach_instruments || []),
+        ...(((teacher as any).instruments || []) as string[])
+      ].filter(Boolean));
+
+      if (facultyCode === 'PIANO') return teachable.has('钢琴');
+      if (facultyCode === 'VOCAL') return teachable.has('声乐');
+      if (facultyCode === 'INSTRUMENT') {
+        return Array.from(teachable).some(inst => facultyExclusiveInstruments.INSTRUMENT.includes(inst));
+      }
+      return false;
+    };
+
     return localTeachers
-      .filter(t => t.faculty_id === selectedFaculty)
+      .filter(t => t.faculty_id === selectedFaculty || canTeachByFaculty(t, selectedFaculty))
       .slice()
       .sort((a, b) => {
         const aNo = (a.teacher_id || '').trim();

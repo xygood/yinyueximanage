@@ -727,6 +727,123 @@ export const authService = {
   },
 };
 
+/** 本地模式下修改教师工号时，同步用户、排课、课程等表中保存的工号字符串 */
+function propagateTeacherWorkIdInLocalStorage(oldId: string, newId: string): void {
+  if (!oldId || !newId || String(oldId) === String(newId)) return;
+
+  const rewriteArray = (
+    key: string,
+    mutator: (item: Record<string, unknown>) => boolean
+  ): void => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const arr: unknown[] = JSON.parse(raw);
+      if (!Array.isArray(arr)) return;
+      let changed = false;
+      for (const item of arr) {
+        if (item && typeof item === 'object' && mutator(item as Record<string, unknown>)) {
+          changed = true;
+        }
+      }
+      if (changed) localStorage.setItem(key, JSON.stringify(arr));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  rewriteArray(STORAGE_KEYS.USERS, (u) => {
+    if (String(u.teacher_id) !== String(oldId)) return false;
+    u.teacher_id = newId;
+    u.id = `user-${newId}`;
+    u.email = `${newId}@music.edu.cn`;
+    return true;
+  });
+
+  rewriteArray(STORAGE_KEYS.SCHEDULED_CLASSES, (c) => {
+    if (String(c.teacher_id) !== String(oldId)) return false;
+    c.teacher_id = newId;
+    return true;
+  });
+
+  rewriteArray(STORAGE_KEYS.COURSES, (c) => {
+    if (String(c.teacher_id) !== String(oldId)) return false;
+    c.teacher_id = newId;
+    return true;
+  });
+
+  rewriteArray(STORAGE_KEYS.ROOMS, (r) => {
+    if (String(r.teacher_id) !== String(oldId)) return false;
+    r.teacher_id = newId;
+    return true;
+  });
+
+  rewriteArray(STORAGE_KEYS.CONFLICTS, (c) => {
+    if (String(c.teacher_id) !== String(oldId)) return false;
+    c.teacher_id = newId;
+    return true;
+  });
+
+  rewriteArray(STORAGE_KEYS.STUDENT_TEACHER_ASSIGNMENTS, (a) => {
+    if (String(a.teacher_id) !== String(oldId)) return false;
+    a.teacher_id = newId;
+    return true;
+  });
+
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.STUDENTS);
+    if (raw) {
+      const students: any[] = JSON.parse(raw);
+      let changed = false;
+      for (const s of students) {
+        if (String(s.teacher_id) === String(oldId)) {
+          s.teacher_id = newId;
+          changed = true;
+        }
+        for (const fld of ['secondary1_teacher_id', 'secondary2_teacher_id', 'secondary3_teacher_id'] as const) {
+          if (String(s[fld]) === String(oldId)) {
+            s[fld] = newId;
+            changed = true;
+          }
+        }
+        const at = s.assigned_teachers;
+        if (at && typeof at === 'object') {
+          for (const k of Object.keys(at)) {
+            if (String(at[k]) === String(oldId)) {
+              at[k] = newId;
+              changed = true;
+            }
+          }
+        }
+      }
+      if (changed) localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const sess = sessionStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    if (sess) {
+      const u = JSON.parse(sess);
+      if (String(u.teacher_id) === String(oldId)) {
+        u.teacher_id = newId;
+        sessionStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(u));
+      }
+    }
+    const sess2 = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    if (sess2) {
+      const u = JSON.parse(sess2);
+      if (String(u.teacher_id) === String(oldId)) {
+        u.teacher_id = newId;
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(u));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 // 教师服务
 export const teacherService = {
   async getAll(): Promise<Teacher[]> {
@@ -842,10 +959,30 @@ export const teacherService = {
       throw new Error('教师不存在');
     }
 
-    teachers[index] = { ...teachers[index], ...updates };
+    const prev = teachers[index];
+    const newWorkId =
+      updates.teacher_id !== undefined && updates.teacher_id !== null
+        ? String(updates.teacher_id).trim()
+        : undefined;
+    const oldWorkId = String(prev.teacher_id || prev.id || '').trim();
+
+    if (newWorkId && oldWorkId && newWorkId !== oldWorkId) {
+      const taken = teachers.some((t, i) => i !== index && String(t.teacher_id) === newWorkId);
+      if (taken) {
+        throw new Error(`工号 ${newWorkId} 已被其他教师使用`);
+      }
+      propagateTeacherWorkIdInLocalStorage(oldWorkId, newWorkId);
+    }
+
+    const merged: Teacher = {
+      ...prev,
+      ...updates,
+      ...(newWorkId ? { id: newWorkId, teacher_id: newWorkId } : {}),
+    };
+    teachers[index] = merged;
     localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
 
-    return teachers[index];
+    return merged;
   },
 
   async exists(teacherId: string): Promise<boolean> {
@@ -1062,9 +1199,12 @@ export const teacherService = {
     instrumentRoom?: string;
     largeClassroom?: string;
     largeClassroomCapacity?: string;
-  }[]): Promise<{
+  }[], mode: 'update' | 'overwrite' = 'update'): Promise<{
     success: number;
     failed: number;
+    skipped?: number;
+    updatedIdentifiers?: string[];
+    skippedIdentifiers?: string[];
     errors: string[];
   }> {
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -1085,6 +1225,9 @@ export const teacherService = {
     console.log(rooms);
 
     let success = 0;
+    let skipped = 0;
+    const updatedIdentifiers: string[] = [];
+    const skippedIdentifiers: string[] = [];
     const errors: string[] = [];
     const roomMap = new Map<string, Room>();
     rooms.forEach(r => roomMap.set(r.room_name, r));
@@ -1128,18 +1271,23 @@ export const teacherService = {
 
         const teacherIndex = teachers.findIndex(t => t.id === teacher!.id);
         console.log('教师索引:', teacherIndex);
+        const beforeRooms = [...(teachers[teacherIndex].fixed_rooms || [])];
 
-        // 先清除教师现有的所有琴房关联，确保导入的数据是干净的
-        console.log('=== 清除现有琴房关联 ===');
-        if (teachers[teacherIndex].fixed_rooms) {
-          console.log('清除前的fixed_rooms:', teachers[teacherIndex].fixed_rooms);
-          teachers[teacherIndex].fixed_rooms = [];
+        if (mode === 'overwrite') {
+          // 覆盖模式：先清空该教师全部琴房关联，再按导入文件重建
+          console.log('=== 覆盖模式：清除现有琴房关联 ===');
+          if (teachers[teacherIndex].fixed_rooms) {
+            console.log('清除前的fixed_rooms:', teachers[teacherIndex].fixed_rooms);
+            teachers[teacherIndex].fixed_rooms = [];
+          }
+          if (teachers[teacherIndex].fixed_room_id) {
+            console.log('清除前的fixed_room_id:', teachers[teacherIndex].fixed_room_id);
+            teachers[teacherIndex].fixed_room_id = undefined;
+          }
+          console.log('清除后的教师数据:', teachers[teacherIndex]);
+        } else {
+          console.log('=== 更新模式：保留现有关联，仅更新导入字段 ===');
         }
-        if (teachers[teacherIndex].fixed_room_id) {
-          console.log('清除前的fixed_room_id:', teachers[teacherIndex].fixed_room_id);
-          teachers[teacherIndex].fixed_room_id = undefined;
-        }
-        console.log('清除后的教师数据:', teachers[teacherIndex]);
 
         // 2. 处理每个专业的琴房
         const roomEntries = [];
@@ -1219,8 +1367,20 @@ export const teacherService = {
           
           console.log('教师更新后数据:', teachers[teacherIndex]);
         }
-
-        success++;
+        const normalizeRooms = (roomList: { room_id: string; faculty_code: string }[] = []) =>
+          roomList
+            .map(r => `${r.faculty_code}:${r.room_id}`)
+            .sort()
+            .join('|');
+        const changed = normalizeRooms(beforeRooms) !== normalizeRooms(teachers[teacherIndex].fixed_rooms || []);
+        if (changed) {
+          success++;
+          updatedIdentifiers.push(entry.teacherIdentifier);
+        } else {
+          skipped++;
+          skippedIdentifiers.push(entry.teacherIdentifier);
+          console.log('教师关联无变化，跳过写入统计:', entry.teacherIdentifier);
+        }
       } catch (err: any) {
         errors.push(`教师 "${entry.teacherIdentifier}": ${err.message}`);
       }
@@ -1230,7 +1390,14 @@ export const teacherService = {
     localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
     localStorage.setItem(STORAGE_KEYS.ROOMS, JSON.stringify(rooms));
 
-    return { success, failed: entries.length - success, errors };
+    return {
+      success,
+      failed: entries.length - success - skipped,
+      skipped,
+      updatedIdentifiers,
+      skippedIdentifiers,
+      errors
+    };
   },
 
   async delete(id: string): Promise<void> {

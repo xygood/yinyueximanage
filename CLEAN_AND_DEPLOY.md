@@ -305,4 +305,37 @@ cd /var/www/music-scheduler
 ./deploy/start.sh
 ```
 
+
+
+```
+#部署步骤
+##1. 本机执行（上传包到服务器）
+cd /Users/gubao/Desktop/0225/music225
+
+
+# 打包（排除 node_modules、venv、.git、__pycache__、.env 等以加快上传）
+tar --exclude='node_modules' --exclude='server/venv' --exclude='.git' --exclude='dist' \
+  --exclude='__pycache__' --exclude='*.pyc' --exclude='server/.env' \
+  -czvf music225.tar.gz .
+
+
+# 上传到阿里云（会提示输入 root 密码）
+scp music225.tar.gz root@47.122.118.106:/tmp/
+2. 登录服务器并解压部署
+# 登录服务器
+ssh root@47.122.118.106
+# 解压并覆盖项目目录
+cd /var/www/music-scheduler
+tar -xzvf /tmp/music225.tar.gz -C .
+rm /tmp/music225.tar.gz
+# 重载 Nginx（前端生效）
+sudo nginx -t && sudo systemctl reload nginx
+# 重启后端（本次有 server 目录修改）
+./deploy/stop.sh
+./deploy/start.sh
+# 退出
+exit
+```
+
+
 文档版本：1.2 | 更新日期：2026-03-08

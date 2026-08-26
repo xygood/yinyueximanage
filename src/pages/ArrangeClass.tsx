@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { useAuth } from '../hooks/useAuth';
 import { useBlockedTime } from '../contexts/BlockedTimeContext';
 import { supabase } from '../services/supabase';
@@ -4570,6 +4571,149 @@ export default function ArrangeClass() {
     }
   };
 
+  // 导出课表（星期×节次样式）
+  const handleExportScheduleGrid = async () => {
+    const weekdayColumns = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+    const normalizeWeeks = (weeks: number[]): string => {
+      if (!weeks.length) return '';
+      const sorted = Array.from(new Set(weeks.filter(w => Number.isFinite(w)).map(w => Number(w)))).sort((a, b) => a - b);
+      if (sorted.length === 0) return '';
+      const ranges: string[] = [];
+      let start = sorted[0];
+      let end = sorted[0];
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i] === end + 1) {
+          end = sorted[i];
+        } else {
+          ranges.push(start === end ? `${start}` : `${start}-${end}`);
+          start = sorted[i];
+          end = sorted[i];
+        }
+      }
+      ranges.push(start === end ? `${start}` : `${start}-${end}`);
+      return ranges.join('、');
+    };
+
+    const extractWeeks = (schedule: any): number[] => {
+      if (schedule.week_number) return [Number(schedule.week_number)];
+      if (schedule.week) return [Number(schedule.week)];
+      if (schedule.start_week && schedule.end_week) {
+        const list: number[] = [];
+        for (let w = Number(schedule.start_week); w <= Number(schedule.end_week); w++) {
+          list.push(w);
+        }
+        return list;
+      }
+      if (schedule.start_week) return [Number(schedule.start_week)];
+      return [];
+    };
+
+    const buildSheetRows = (results: any[]) => {
+      const periods = PERIOD_CONFIG.map(item => item.period);
+      const header = ['节次 / 星期', ...weekdayColumns];
+      const rows: any[][] = [header];
+
+      periods.forEach(period => {
+        const periodConfig = PERIOD_CONFIG.find(item => item.period === period);
+        const periodLabel = periodConfig
+          ? `第${period}节 ${periodConfig.startTime}-${periodConfig.endTime}`
+          : `第${period}节`;
+        const row: string[] = [periodLabel];
+
+        for (let day = 1; day <= 7; day++) {
+          const cellEntries: string[] = [];
+
+          results.forEach((result: any) => {
+            const schedules = Array.isArray(result.originalSchedules) ? result.originalSchedules : [];
+            const matchedSchedules = schedules.filter((s: any) => Number(s.day_of_week || s.day) === day && Number(s.period) === period);
+            if (matchedSchedules.length === 0) return;
+
+            const allWeeks = matchedSchedules.flatMap((s: any) => extractWeeks(s));
+            const weekText = normalizeWeeks(allWeeks);
+            const studentNames = (result.students || [])
+              .map((s: any) => s.name)
+              .filter(Boolean)
+              .join('、') || (result.studentName || '').replace(/<br>/g, '、');
+
+            const classNames = Array.from(new Set(
+              [
+                ...(result.students || []).map((s: any) => s.className || ''),
+                ...String(result.studentClasses || '').split('<br>'),
+                result.studentClass || '',
+              ].map((name: string) => String(name).trim()).filter(Boolean)
+            )).join('、');
+
+            const lines = [
+              studentNames || '-',
+              classNames || '-',
+              weekText ? `第${weekText}周` : '',
+            ].filter(Boolean);
+
+            cellEntries.push(lines.join('\n'));
+          });
+
+          row.push(cellEntries.join('\n\n'));
+        }
+
+        rows.push(row);
+      });
+
+      return rows;
+    };
+
+    const exportWorkbook = (teacherResultsMap: Array<{ name: string; results: any[] }>, fileName: string) => {
+      const workbook = XLSX.utils.book_new();
+
+      teacherResultsMap.forEach(({ name, results }, index) => {
+        const aoa = buildSheetRows(results);
+        const sheet = XLSX.utils.aoa_to_sheet(aoa);
+        sheet['!cols'] = [
+          { wch: 20 },
+          { wch: 26 }, { wch: 26 }, { wch: 26 }, { wch: 26 }, { wch: 26 }, { wch: 26 }, { wch: 26 }
+        ];
+        const sheetName = (name || `课表${index + 1}`).slice(0, 31);
+        XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+      });
+
+      XLSX.writeFile(workbook, `${fileName}.xlsx`);
+    };
+
+    if (isAdmin) {
+      const choice = window.confirm('是否导出所有教师的星期节次课表？\n\n点击"确定"导出所有教师（每位教师一个工作表）\n点击"取消"导出当前教师');
+      if (choice) {
+        const teacherGroups = new Map<string, any[]>();
+        scheduleResults.forEach((result: any) => {
+          const tName = result.teacherName || '未命名教师';
+          if (!teacherGroups.has(tName)) teacherGroups.set(tName, []);
+          teacherGroups.get(tName)!.push(result);
+        });
+
+        const groupedResults = Array.from(teacherGroups.entries()).map(([name, results]) => ({ name, results }));
+        exportWorkbook(groupedResults, `专业小课课表_星期节次_${selectedAcademicYear}_${selectedSemesterLabel}`);
+        showToast('success', '星期节次课表导出成功');
+        return;
+      }
+
+      const teacherIdSet = getCurrentTeacherIdSet();
+      const filteredResults = teacherIdSet.size > 0
+        ? scheduleResults.filter(result => teacherIdSet.has(normalizeTeacherId(result.teacherId)))
+        : scheduleResults;
+      exportWorkbook(
+        [{ name: targetTeacher?.name || teacher?.name || '教师课表', results: filteredResults }],
+        `${targetTeacher?.name || teacher?.name || '教师'}课表_星期节次_${selectedAcademicYear}_${selectedSemesterLabel}`
+      );
+      showToast('success', '星期节次课表导出成功');
+      return;
+    }
+
+    exportWorkbook(
+      [{ name: teacher?.name || '教师课表', results: scheduleResults }],
+      `${teacher?.name || '教师'}课表_星期节次_${selectedAcademicYear}_${selectedSemesterLabel}`
+    );
+    showToast('success', '星期节次课表导出成功');
+  };
+
   // 导出开课信息（CX_JW_KKXX格式）
   const handleExportKKXX = async () => {
     try {
@@ -4632,12 +4776,68 @@ export default function ArrangeClass() {
         
         // 教学班组成：直接使用排课结果中的学生姓名
         const jxbzc = result.students?.map((s: any) => s.name).join('、') || result.studentName || '';
+        // 教学班组成（学号）：导出小组中所有学生的学号
+        const jxbzcXh = result.students?.map((s: any) => s.student_id || '').filter(Boolean).join(',') ||
+          (result.studentIds ? String(result.studentIds).replace(/<br>/g, ',') : '');
+
+        // 班级编号：与排课信息中的班级编号一致（从班级名称中提取数字并加前缀 0671）
+        const classNames = Array.from(new Set(
+          [
+            ...(result.students || []).map((student: any) => student.className || ''),
+            ...String(result.studentClasses || '').split('<br>'),
+            result.studentClass || '',
+          ].map((name: string) => String(name).trim()).filter(Boolean)
+        ));
+        const classNumber = Array.from(new Set(
+          classNames
+            .map((name: string) => {
+              const match = name.match(/\d+/);
+              return match ? match[0] : '';
+            })
+            .filter(Boolean)
+        ))
+          .map((num) => '0671' + num)
+          .join(',');
+
+        // 周次学时：按排课信息的周次合并规则，从 originalSchedules 中合并所有周次，学时固定为 1
+        const schedules = result.originalSchedules || [];
+        let zcxsh = '';
+        if (schedules.length > 0) {
+          const weeksSet = new Set<number>();
+          schedules.forEach((schedule: any) => {
+            const w = schedule.start_week || schedule.week;
+            if (w) weeksSet.add(w);
+          });
+          const weeks = Array.from(weeksSet).sort((a, b) => a - b);
+          if (weeks.length > 0) {
+            const mergedRanges: { start: number; end: number }[] = [];
+            let start = weeks[0];
+            let end = weeks[0];
+            for (let i = 1; i < weeks.length; i++) {
+              if (weeks[i] === end + 1) {
+                end = weeks[i];
+              } else {
+                mergedRanges.push({ start, end });
+                start = weeks[i];
+                end = weeks[i];
+              }
+            }
+            mergedRanges.push({ start, end });
+            const parts = mergedRanges.map(range =>
+              range.start === range.end
+                ? `${range.start}:1`
+                : `${range.start}-${range.end}:1`
+            );
+            zcxsh = parts.join(',');
+          }
+        }
         
         kkxxData.push({
           JXBID: jxbid,
           XNXQ: xnxq,
           JXBBH: jxbid,
           JXBMC: jxbmc,
+          BJBH: classNumber,
           FJXBID: '',
           FJXBBH: '',
           BJRS: bjrs,
@@ -4654,11 +4854,14 @@ export default function ArrangeClass() {
           KSXS: '考查',
           JXMS: '小组课',
           KSFS: '随堂考查',
+          ZCXSH: zcxsh,
+          LPJC: '1',
           SFXK: '是',
           SFPK: '是',
           XB: '',
           RKJS: result.teacherName || '',
           JXBZC: jxbzc,
+          JXBZC_XH: jxbzcXh,
         });
       });
 
@@ -4738,6 +4941,10 @@ export default function ArrangeClass() {
         ].map((name: string) => String(name).trim()).filter(Boolean)
       ));
       const className = classNames.join(',');
+
+      // 学生名单：与开课信息中的教学班组成（姓名）一致（顿号分隔）
+      const studentNameList = result.students?.map((s: any) => s.name).join('、') || result.studentName || '';
+
       const classNumber = Array.from(new Set(
         classNames
           .map((name: string) => {
@@ -4745,7 +4952,9 @@ export default function ArrangeClass() {
             return match ? match[0] : '';
           })
           .filter(Boolean)
-      )).join(',');
+      ))
+        .map((num) => '0671' + num)
+        .join(',');
       
       // 从originalSchedules中提取排课时间信息，并按星期和节次分组合并周次
       const schedules = result.originalSchedules || [];
@@ -4797,7 +5006,59 @@ export default function ArrangeClass() {
             }
           });
           const skzc = rangeStrings.join(',');
+
+          // 排课周次数：本行覆盖的周数（去重后，按合并范围还原总数量）
+          const weekCount = mergedRanges.reduce((sum, r) => sum + (r.end - r.start + 1), 0);
           
+          // 导出用琴房名称（与排课结果表格显示逻辑保持一致）
+          const exportRoomName = (() => {
+            // 优先使用排课记录中保存的琴房信息
+            if (result.room_name) {
+              return result.room_name;
+            }
+            // 如果没有房间名称，尝试根据房间ID查找
+            const rid = result.room_id || timeGroup.room_id;
+            if (rid && rooms.length > 0) {
+              const room = rooms.find(r => String(r.id) === String(rid) || String((r as any).room_id) === String(rid));
+              if (room?.room_name) return room.room_name;
+            }
+            // 后备：根据教师姓名查找琴房（复用页面展示逻辑的简化版）
+            const teacher = availableTeachers.find(t => t.name === result.teacherName);
+            if (teacher?.fixed_rooms && teacher.fixed_rooms.length > 0) {
+              // 林琳教师特殊处理：根据课程类型只显示一个琴房
+              if (result.teacherName === '林琳' && result.courseType) {
+                if (result.courseType === '钢琴') {
+                  const pianoRoom = teacher.fixed_rooms.find(fr => {
+                    const room = rooms.find(r => String(r.id) === String(fr.room_id) || String((r as any).room_id) === String(fr.room_id));
+                    return room?.room_name === '影琴221-03';
+                  });
+                  if (pianoRoom) {
+                    const room = rooms.find(r => String(r.id) === String(pianoRoom.room_id) || String((r as any).room_id) === String(pianoRoom.room_id));
+                    return room?.room_name || String(pianoRoom.room_id);
+                  }
+                } else if (result.courseType === '器乐') {
+                  const instrumentalRoom = teacher.fixed_rooms.find(fr => {
+                    const room = rooms.find(r => String(r.id) === String(fr.room_id) || String((r as any).room_id) === String(fr.room_id));
+                    return room?.room_name === '器乐排练室114';
+                  });
+                  if (instrumentalRoom) {
+                    const room = rooms.find(r => String(r.id) === String(instrumentalRoom.room_id) || String((r as any).room_id) === String(instrumentalRoom.room_id));
+                    return room?.room_name || String(instrumentalRoom.room_id);
+                  }
+                }
+              }
+              // 其他教师或未找到对应琴房时，导出全部固定琴房名称（逗号分隔）
+              return teacher.fixed_rooms.map(fr => {
+                const room = rooms.find(r => String(r.id) === String(fr.room_id) || String((r as any).room_id) === String(fr.room_id));
+                return room?.room_name || String(fr.room_id);
+              }).join(',');
+            } else if (teacher?.fixed_room_id) {
+              const room = rooms.find(r => String(r.id) === String(teacher.fixed_room_id) || String((r as any).room_id) === String(teacher.fixed_room_id));
+              return room?.room_name || String(teacher.fixed_room_id);
+            }
+            return '';
+          })();
+
           pkxxData.push({
             JXBID: jxbid,
             XNXQ: xnxq,
@@ -4805,6 +5066,9 @@ export default function ArrangeClass() {
             JXBMC: jxbmc,
             BJMC: className,
             BJBH: classNumber,
+            // 小组人数：来自排课结果中的小组人数
+            groupSizeNumber: result.groupSize || 0,
+            studentNameList,
             KCBH: courseNumber,
             KCMC: courseName,
             RKJSID: parseInt(teacherWorkId?.replace(/\D/g, '') || '0') || 0,
@@ -4819,8 +5083,14 @@ export default function ArrangeClass() {
             SKZC: skzc,
             SKXQ: String(timeGroup.day || ''),
             JCFW: String(timeGroup.period || ''),
+            // 排课次数：排课周次 * 连续节次
+            periodCount: (() => {
+              // 当前导出规则：连续节次不做奇偶换算，固定按 1 计
+              if (!Number.isFinite(weekCount)) return 0;
+              return weekCount;
+            })(),
             LXJC: '1',
-            CRMC: timeGroup.room_name || result.room_name || '',
+            CRMC: exportRoomName,
             CRBH: timeGroup.room_id || result.room_id || '',
           });
         });
@@ -6535,6 +6805,11 @@ export default function ArrangeClass() {
         room_id = firstSchedule?.room_id;
         room_name = firstSchedule?.room_name || firstSchedule?.rooms?.room_name || (firstSchedule as any)?.rooms?.room_name || (firstSchedule as any)?.room_name;
       }
+      // 与排课结果表格琴房列一致：若仅有 room_id 无 room_name，用 rooms 查表得到名称
+      if (!room_name && room_id && rooms.length > 0) {
+        const room = rooms.find((r: any) => r.id === room_id || r.room_id === room_id);
+        room_name = room?.room_name || '';
+      }
       
       // 从 courses 数据中获取课程编号和学分（根据具体班级区分）
       // 获取第一个学生的信息
@@ -6692,7 +6967,7 @@ export default function ArrangeClass() {
 
 
     return filteredByType;
-  }, [scheduledClasses, students, targetTeacher, teacher, courses, isAdmin, fixedRooms]);
+  }, [scheduledClasses, students, targetTeacher, teacher, courses, isAdmin, fixedRooms, rooms]);
 
   // 过滤状态
   const [scheduleFilters, setScheduleFilters] = useState({
@@ -8973,6 +9248,15 @@ export default function ArrangeClass() {
             >
               <Download className="w-4 h-4" />
               导出课表
+            </button>
+            <button
+              onClick={handleExportScheduleGrid}
+              className="btn-secondary flex items-center gap-2"
+              disabled={scheduledClasses.length === 0}
+              title="按星期×节次导出课表"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              导出课表(星期节次)
             </button>
             {isAdmin && (
               <>
