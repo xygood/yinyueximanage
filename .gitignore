@@ -171,6 +171,9 @@ test-*.ts
 *.doc
 文档/
 
+# 期中考试抽查通知（含学生/教师个人信息，勿推送；历史提交 edb1d95 中已有记录，不再跟踪）
+docs/期中专业考试抽查通知.md
+
 # One-off data analysis scripts
 analyze_*.py
 check_*.py
